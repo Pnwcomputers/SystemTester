@@ -63,8 +63,8 @@ Windows 10/11; PowerShell 5.1+ (or PowerShell 7); Sysinternals tools placed in `
 
 ## 🔧 Common Fixes
 
-**Execution policy blocked:** run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force` or pick Option 4 in the launcher.
-**Sysinternals tools not found:** create `.\Sysinternals\` and copy the tools there; missing tools are skipped with a friendly notice.
+- **Execution policy blocked:** run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force` or pick Option 4 in the launcher.
+- **Sysinternals tools not found:** create `.\Sysinternals\` and copy the tools there; missing tools are skipped with a friendly notice.
 
 ---
 
@@ -76,18 +76,18 @@ Admin rights are optional (some checks benefit from elevation). Reports include 
 
 ## 🧭 Quick Links
 
-Project home: `README` (this file).
-Issues & feature requests: open a GitHub issue on this repo.
-License: MIT (see `LICENSE`).
-Changelog/Roadmap: see below.
+- Project home: `README` (this file).
+- Issues & feature requests: open a GitHub issue on this repo.
+- License: MIT (see `LICENSE`).
+- Changelog/Roadmap: see below.
 
 ---
 
 ## 📈 Roadmap
 
-**v1.1**: optional GPU/SMART checks; `-Skip*` flags (e.g., `-SkipStorage`, `-SkipSecurity`); tunable summary verbosity (e.g., `-MaxLinesPerTool`).
-**v1.2**: basic HTML report export; compressed artifacts output folder; improved parsers for `sigcheck`, `handle`, `autorunsc`.
-**v2.0**: minimal WPF/WinUI menu alternative; pluggable “module” system; JSON config for per-tool args; signed releases.
+- **v1.1**: optional GPU/SMART checks; `-Skip*` flags (e.g., `-SkipStorage`, `-SkipSecurity`); tunable summary verbosity (e.g., `-MaxLinesPerTool`).
+- **v1.2**: basic HTML report export; compressed artifacts output folder; improved parsers for `sigcheck`, `handle`, `autorunsc`.
+- **v2.0**: minimal WPF/WinUI menu alternative; pluggable “module” system; JSON config for per-tool args; signed releases.
 
 ---
 
