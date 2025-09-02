@@ -41,9 +41,9 @@ Windows 10/11; PowerShell 5.1+ (or PowerShell 7); Sysinternals tools placed in `
 
 ## 🚀 Quick Start
 
-Option A — Interactive menu: run `RunSystemTester.bat`.
-Option B — Autorun everything + generate reports: run `RunSystemTester.bat` and choose option 2.
-Option C — Direct PowerShell (no BAT): interactive `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1`; autorun `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun`; save reports to a specific folder `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun -OutputPath "E:\Reports"`.
+- Option A — Interactive menu: run `RunSystemTester.bat`.
+- Option B — Autorun everything + generate reports: run `RunSystemTester.bat` and choose option 2.
+- Option C — Direct PowerShell (no BAT): interactive `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1`; autorun `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun`; save reports to a specific folder `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun -OutputPath "E:\Reports"`.
 
 **Reports created:** `SystemTest_Clean_YYYYMMDD_HHMMSS.txt` and `SystemTest_Detailed_YYYYMMDD_HHMMSS.txt`.
 
@@ -51,13 +51,13 @@ Option C — Direct PowerShell (no BAT): interactive `powershell -ExecutionPolic
 
 ## 🧪 What It Runs
 
-**System Info:** `psinfo`, `clockres`, plus WMI OS/ComputerSystem overview.
-**CPU:** `coreinfo`, lightweight CPU perf loop, top process usage.
-**RAM:** WMI memory details, `testlimit -m 100`, `\Memory\Pages/sec` sampling.
-**Storage:** WMI disk overview, `du -l 2 C:\`, `streams -s C:\Windows\System32`, `contig -a C:\`, simple 10 MB read/write test.
-**Processes:** `pslist -t`, `handle -p explorer` (if present).
-**Security:** `autorunsc -a -c` (if present).
-**Network:** connection count via `netstat -an`.
+- **System Info:** `psinfo`, `clockres`, plus WMI OS/ComputerSystem overview.
+- **CPU:** `coreinfo`, lightweight CPU perf loop, top process usage.
+- **RAM:** WMI memory details, `testlimit -m 100`, `\Memory\Pages/sec` sampling.
+- **Storage:** WMI disk overview, `du -l 2 C:\`, `streams -s C:\Windows\System32`, `contig -a C:\`, simple 10 MB read/write test.
+- **Processes:** `pslist -t`, `handle -p explorer` (if present).
+- **Security:** `autorunsc -a -c` (if present).
+- **Network:** connection count via `netstat -an`.
 
 ---
 
