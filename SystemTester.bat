@@ -1,4 +1,39 @@
 @echo off
+setlocal enabledelayedexpansion
+
+:: ===========================
+:: Stable self-elevation block
+:: ===========================
+REM 1) Check if we're already elevated
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Requesting administrative privileges...
+    echo Please click "Yes" in the UAC prompt that appears.
+    echo.
+    
+    REM Re-launch this batch file with elevation
+    powershell.exe -NoProfile -Command ^
+      "Start-Process -FilePath '%~f0' -Verb RunAs -Wait"
+    
+    REM Exit the non-elevated instance
+    exit /b
+)
+
+REM 2) We're now elevated - show confirmation
+echo Administrative privileges confirmed.
+echo Current directory: %~dp0
+echo.
+
+
+:: ===========================
+:: From here on, we are elevated
+:: ===========================
+title Portable Sysinternals System Tester Launcher
+color 0B
+
+:: Pin working dir to script folder (handles double-clicks)
+pushd "%~dp0"
+
 title Portable Sysinternals System Tester Launcher
 color 0B
 
