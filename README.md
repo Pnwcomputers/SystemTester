@@ -2,9 +2,9 @@
 
 ![Portability](https://img.shields.io/badge/Portable-Yes-brightgreen) ![Windows Support](https://img.shields.io/badge/Windows-10%20%7C%2011-blue) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue) ![Sysinternals](https://img.shields.io/badge/Sysinternals-Supported-purple) ![Maintenance](https://img.shields.io/badge/Maintained-Yes-green) ![GitHub issues](https://img.shields.io/github/issues/Pnwcomputers/PortableSysinternalsTester) ![License](https://img.shields.io/github/license/Pnwcomputers/PortableSysinternalsTester)
 
-**Thumb-drive friendly Windows health check toolkit**
+**Thumb-drive friendly, Windows hardware health check toolkit using Sysinternals applications**
 
-A no-install PowerShell solution that runs a curated set of **Sysinternals** and Windows diagnostics, then produces: **Clean Summary Report** (human-readable, de-noised) and **Detailed Report** (cleaned tool outputs). Perfect for **field diagnostics**, **baseline health checks**, and **handoff reports** to clients.
+A no-install PowerShell solution that runs a curated set of **Sysinternals** and Windows hardware diagnostics tools, then produces: **Clean Summary Report** (human-readable, de-noised) and **Detailed Report** (cleaned tool outputs). Perfect for **field diagnostics**, **baseline health checks**, and **handoff reports** to clients.
 
 ---
 
