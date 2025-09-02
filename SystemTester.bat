@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 :: ===========================
 :: Stable self-elevation block
 :: ===========================
-REM 1) Check if we're already elevated
+REM Check if we're already elevated
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Requesting administrative privileges...
@@ -19,7 +19,7 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-REM 2) We're now elevated - show confirmation
+REM We're now elevated - show confirmation
 echo Administrative privileges confirmed.
 echo Current directory: %~dp0
 echo.
