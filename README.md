@@ -26,16 +26,16 @@ Windows 10/11; PowerShell 5.1+ (or PowerShell 7); Sysinternals tools placed in `
 ---
 
 ## Recommended Folder Structure:
-├─ SystemTester.ps1
-├─ RunSystemTester.bat
-├─ Sysinternals
-│ ├─ psinfo.exe
-│ ├─ coreinfo.exe
-│ ├─ pslist.exe
-│ ├─ testlimit.exe
-│ ├─ du.exe
-│ ├─ streams.exe
-│ └─ (optional) handle.exe, autorunsc.exe, contig.exe, sigcheck.exe, clockres.exe
+- SystemTester.ps1
+- RunSystemTester.bat
+- Sysinternals
+-   - psinfo.exe
+    - coreinfo.exe
+    - pslist.exe
+    - testlimit.exe
+    - du.exe
+    - streams.exe
+    -   -(optional) handle.exe, autorunsc.exe, contig.exe, sigcheck.exe, clockres.exe
 
 ---
 
