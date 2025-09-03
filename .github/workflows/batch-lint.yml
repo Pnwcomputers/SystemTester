@@ -1,0 +1,24 @@
+name: Batch File Check
+
+on:
+  push:
+    paths:
+      - '**.bat'
+  pull_request:
+    paths:
+      - '**.bat'
+
+jobs:
+  check-batch:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Validate batch files
+        run: |
+          for %%f in (*.bat) do (
+            echo Validating %%f
+            cmd /c "call %%f" || echo %%f failed to run
+          )
+        shell: cmd
