@@ -28,8 +28,7 @@ Windows 10/11; PowerShell 5.1+ (or PowerShell 7); Sysinternals tools placed in `
 ## Recommended Folder Structure:
 ```
 SystemTester.ps1
-SystemTester_device_grouped.ps1 (optional)
-RunSystemTester.bat
+SystemTester.bat
 Sysinternals\
 ├── psinfo.exe
 ├── coreinfo.exe
