@@ -1,74 +1,75 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal enableextensions enabledelayedexpansion
 
-:: ===========================
-:: Stable self-elevation block
-:: ===========================
-REM Check if we're already elevated
-net session >nul 2>&1
-if %errorlevel% neq 0 (
+:: =====================================================
+:: Stable self-elevation (no infinite loops, Home-safe)
+::   - Checks Local Admin SID instead of relying on
+::     Server service (net session) which can be disabled
+:: =====================================================
+set "_ELEV_FLAG=%~1"
+whoami /groups | findstr /c:"S-1-5-32-544" >nul 2>&1
+if errorlevel 1 (
+    if /i "%_ELEV_FLAG%"=="/elevated" (
+        echo.
+        echo [ERROR] Elevation failed or was cancelled.
+        echo        Right-click this file and choose "Run as administrator".
+        echo.
+        pause
+        exit /b 1
+    )
     echo Requesting administrative privileges...
-    echo Please click "Yes" in the UAC prompt that appears.
-    echo.
-    
-    REM Re-launch this batch file with elevation
-    powershell.exe -NoProfile -Command ^
-      "Start-Process -FilePath '%~f0' -Verb RunAs -Wait"
-    
-    REM Exit the non-elevated instance
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "Start-Process -FilePath '%~f0' -ArgumentList '/elevated %*' -Verb RunAs"
     exit /b
 )
 
-REM We're now elevated - show confirmation
-echo Administrative privileges confirmed.
-echo Current directory: %~dp0
-echo.
-
-
-:: ===========================
-:: From here on, we are elevated
-:: ===========================
+:: =====================================================
+:: We're elevated from here on
+:: =====================================================
 title Portable Sysinternals System Tester Launcher
 color 0B
 
-:: Pin working dir to script folder (handles double-clicks)
+:: Work from the script folder (prevents System32 drift)
 pushd "%~dp0"
-
-title Portable Sysinternals System Tester Launcher
-color 0B
 
 echo ========================================================
 echo         PORTABLE SYSINTERNALS SYSTEM TESTER
 echo ========================================================
 echo.
 
-REM Get current directory and drive
-set "SCRIPT_DIR=%~dp0"
+:: Resolve script dir and drive
+set "SCRIPT_DIR=%cd%\"
 set "DRIVE_LETTER=%~d0"
+
+:: Pick the correct PS1 (prefer the new device-grouped file if present)
+set "SCRIPT_PS1=%SCRIPT_DIR%SystemTester_device_grouped.ps1"
+if not exist "%SCRIPT_PS1%" set "SCRIPT_PS1=%SCRIPT_DIR%SystemTester.ps1"
 
 echo Running from: %DRIVE_LETTER%
 echo Script location: %SCRIPT_DIR%
+echo PowerShell script: %SCRIPT_PS1%
 echo.
 
-REM Check if PowerShell script exists
-if not exist "%SCRIPT_DIR%SystemTester.ps1" (
-    echo ERROR: SystemTester.ps1 not found!
-    echo Please make sure SystemTester.ps1 is in the same folder as this batch file.
+:: Validate the PowerShell script exists
+if not exist "%SCRIPT_PS1%" (
+    echo [ERROR] PowerShell script not found.
+    echo         Expected: SystemTester_device_grouped.ps1 or SystemTester.ps1
     echo.
     pause
+    popd
     exit /b 1
 )
 
 echo Checking PowerShell availability...
-powershell -Command "Write-Host 'PowerShell is available'" >nul 2>&1
+powershell -NoProfile -Command "$PSVersionTable.PSVersion.ToString()" >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: PowerShell is not available on this system.
-    echo This script requires PowerShell to run.
+    echo [ERROR] PowerShell is not available on this system.
+    echo         This launcher requires Windows PowerShell 5.1 or PowerShell 7+.
     echo.
     pause
+    popd
     exit /b 1
 )
-
 echo PowerShell found!
 echo.
 
@@ -81,17 +82,17 @@ echo.
 echo Running from: %DRIVE_LETTER%
 echo.
 echo 1. Run with Interactive Menu
-echo 2. Run All Tests Automatically  
-echo 3. Run with Output to Thumb Drive
-echo 4. Fix PowerShell Execution Policy (Admin Required)
-echo 5. Show Help/Troubleshooting
+echo 2. Run ALL Tests Automatically (Classic Order)
+echo 3. Run ALL Tests Automatically (Grouped by Device)
+echo 4. Fix PowerShell Execution Policy (CurrentUser)
+echo 5. Show Help / Troubleshooting
 echo 6. Exit
 echo.
 set /p "choice=Choose an option (1-6): "
 
 if "%choice%"=="1" goto INTERACTIVE
-if "%choice%"=="2" goto AUTORUN  
-if "%choice%"=="3" goto THUMBDRIVE
+if "%choice%"=="2" goto AUTORUN_CLASSIC
+if "%choice%"=="3" goto AUTORUN_DEVICE
 if "%choice%"=="4" goto FIXPOLICY
 if "%choice%"=="5" goto HELP
 if "%choice%"=="6" goto EXIT
@@ -104,44 +105,45 @@ goto MENU
 echo.
 echo Starting Interactive Mode...
 echo.
-powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%SystemTester.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%"
 if errorlevel 1 (
     echo.
-    echo Script encountered an error. Check the output above.
+    echo [ERROR] Script encountered an error. Check the output above.
     pause
 )
 goto MENU
 
-:AUTORUN
+:AUTORUN_CLASSIC
 echo.
-echo Running All Tests Automatically...
+echo Running ALL tests automatically (Classic Order)...
 echo.
-powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%SystemTester.ps1" -AutoRun
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -AutoRun
 if errorlevel 1 (
     echo.
-    echo Script encountered an error. Check the output above.
+    echo [ERROR] Script encountered an error. Check the output above.
     pause
 )
 goto MENU
 
-:THUMBDRIVE
+:AUTORUN_DEVICE
 echo.
-echo Running with Output to Thumb Drive...
+echo Running ALL tests automatically (Grouped by Device)...
 echo.
-powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%SystemTester.ps1" -OutputToThumbDrive
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -AutoRunByDevice
 if errorlevel 1 (
     echo.
-    echo Script encountered an error. Check the output above.
+    echo [ERROR] Script encountered an error. Check the output above.
     pause
 )
 goto MENU
 
 :FIXPOLICY
 echo.
-echo Attempting to fix PowerShell execution policy...
-echo This requires administrator privileges.
+echo Setting PowerShell execution policy for CurrentUser to RemoteSigned...
+echo (Already elevated; no extra UAC prompt should appear.)
 echo.
-powershell -Command "Start-Process PowerShell -ArgumentList '-Command Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; Write-Host Execution policy updated successfully; pause' -Verb RunAs"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; Write-Host 'Execution policy updated successfully'; Start-Sleep -Seconds 2"
 echo.
 echo If successful, you can now run the script normally.
 pause
@@ -155,44 +157,24 @@ echo ========================================================
 echo.
 echo COMMON ISSUES AND SOLUTIONS:
 echo.
-echo 1. SCRIPT WINDOW CLOSES IMMEDIATELY
-echo    - This batch launcher should prevent that issue
-echo    - Alternative: Run from PowerShell console manually
+echo 1. SCRIPT WINDOW CLOSES OR "CRASHES"
+echo    - Run from an open Command Prompt to see messages.
+echo    - This launcher pauses on failures.
 echo.
 echo 2. EXECUTION POLICY ERRORS
-echo    - Use Option 4 to fix execution policy
-echo    - Or run PowerShell as Administrator and run:
-echo      Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+echo    - Use Option 4 to set CurrentUser to RemoteSigned.
+echo    - Or run manually:
+echo      PowerShell: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 echo.
 echo 3. SYSINTERNALS TOOLS NOT FOUND
-echo    - Download Sysinternals Suite from Microsoft
-echo    - Extract to: %SCRIPT_DIR%Sysinternals\
-echo    - Or extract directly to: %SCRIPT_DIR%
+echo    - Place Sysinternals Suite under: %SCRIPT_DIR%Sysinternals\
 echo.
 echo 4. PERMISSION ERRORS
-echo    - Try running as Administrator
-echo    - Check if thumb drive is write-protected
+echo    - This launcher self-elevates via UAC.
 echo.
-echo 5. SCRIPT FREEZES OR HANGS  
-echo    - Some tools may take time on slower systems
-echo    - Press Ctrl+C to cancel if needed
-echo.
-echo SETUP CHECKLIST:
-echo [x] SystemTester.ps1 in same folder as this batch file
-echo [ ] Sysinternals tools in Sysinternals subfolder
-echo [ ] PowerShell execution policy set to RemoteSigned
-echo [ ] Running with appropriate permissions
-echo.
-echo RECOMMENDED FOLDER STRUCTURE:
-echo %DRIVE_LETTER%
-echo ├── SystemTester.ps1
-echo ├── RunSystemTester.bat (this file)  
-echo ├── Sysinternals\
-echo │   ├── psinfo.exe
-echo │   ├── coreinfo.exe
-echo │   ├── pslist.exe
-echo │   └── (other tools...)
-echo └── TestResults\ (auto-created)
+echo NOTES:
+echo - Option 2 = original "classic" sequence.
+echo - Option 3 = runs tests grouped by device (CPU->RAM->Disks/Volumes->NICs->GPU->Battery->System).
 echo.
 pause
 goto MENU
@@ -201,5 +183,6 @@ goto MENU
 echo.
 echo Thank you for using Portable Sysinternals System Tester!
 echo.
-timeout /t 2 >nul
+timeout /t 1 >nul
+popd
 exit /b 0
