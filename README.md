@@ -1,6 +1,4 @@
-# 🚀 Portable Sysinternals System Tester (v1.0)
-
-![Portability](https://img.shields.io/badge/Portable-Yes-brightgreen) ![Windows Support](https://img.shields.io/badge/Windows-10%20%7C%2011-blue) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue) ![Sysinternals](https://img.shields.io/badge/Sysinternals-Supported-purple) ![Maintenance](https://img.shields.io/badge/Maintained-Yes-green) ![GitHub issues](https://img.shields.io/github/issues/Pnwcomputers/PortableSysinternalsTester) ![License](https://img.shields.io/github/license/Pnwcomputers/PortableSysinternalsTester)
+# 🧰 Portable Sysinternals System Tester
 
 **Thumb-drive friendly, Windows hardware health check toolkit using Sysinternals applications**
 
@@ -16,6 +14,8 @@ A no-install PowerShell solution that runs a curated set of **Sysinternals** and
 * **🗂️ Smart Reporting** — timestamped **Summary** + **Detailed** TXT reports
 * **📦 Fully Portable** — run from USB; no install required
 * **🧰 Graceful Degradation** — missing tools are detected and skipped automatically
+* **🔐 Robust Elevation Handling** — uses SID-based check for admin rights (no reliance on `net session`)
+* **🧭 Device-Grouped Test Mode** — new `-AutoRunByDevice` option for structured diagnostics
 
 ---
 
@@ -26,38 +26,49 @@ Windows 10/11; PowerShell 5.1+ (or PowerShell 7); Sysinternals tools placed in `
 ---
 
 ## Recommended Folder Structure:
-- SystemTester.ps1
-- RunSystemTester.bat
-- Sysinternals
--   - psinfo.exe
-    - coreinfo.exe
-    - pslist.exe
-    - testlimit.exe
-    - du.exe
-    - streams.exe
-    -   -(optional) handle.exe, autorunsc.exe, contig.exe, sigcheck.exe, clockres.exe
+```
+SystemTester.ps1
+SystemTester_device_grouped.ps1 (optional)
+RunSystemTester.bat
+Sysinternals\
+├── psinfo.exe
+├── coreinfo.exe
+├── pslist.exe
+├── testlimit.exe
+├── du.exe
+├── streams.exe
+├── (optional) handle.exe, autorunsc.exe, contig.exe, sigcheck.exe, clockres.exe
+TestResults\ (auto-created)
+```
 
 ---
 
 ## 🚀 Quick Start
 
-- Option A — Interactive menu: run `RunSystemTester.bat`.
-- Option B — Autorun everything + generate reports: run `RunSystemTester.bat` and choose option 2.
-- Option C — Direct PowerShell (no BAT): interactive `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1`; autorun `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun`; save reports to a specific folder `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun -OutputPath "E:\Reports"`.
+- **Option A — Interactive menu:** run `RunSystemTester.bat`.
+- **Option B — Autorun everything (classic):** choose option 2 in the launcher.
+- **Option C — Autorun grouped by device:** choose option 3 in the launcher.
+- **Option D — Direct PowerShell (no BAT):**
+  - Interactive: `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1`
+  - Autorun: `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun`
+  - Grouped: `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRunByDevice`
+  - Save reports to folder: `powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun -OutputPath "E:\Reports"`
 
-**Reports created:** `SystemTest_Clean_YYYYMMDD_HHMMSS.txt` and `SystemTest_Detailed_YYYYMMDD_HHMMSS.txt`.
+**Reports created:**  
+- `SystemTest_Clean_YYYYMMDD_HHMMSS.txt`  
+- `SystemTest_Detailed_YYYYMMDD_HHMMSS.txt`
 
 ---
 
 ## 🧪 What It Runs
 
-- **System Info:** `psinfo`, `clockres`, plus WMI OS/ComputerSystem overview.
-- **CPU:** `coreinfo`, lightweight CPU perf loop, top process usage.
-- **RAM:** WMI memory details, `testlimit -m 100`, `\Memory\Pages/sec` sampling.
-- **Storage:** WMI disk overview, `du -l 2 C:\`, `streams -s C:\Windows\System32`, `contig -a C:\`, simple 10 MB read/write test.
-- **Processes:** `pslist -t`, `handle -p explorer` (if present).
-- **Security:** `autorunsc -a -c` (if present).
-- **Network:** connection count via `netstat -an`.
+- **System Info:** `psinfo`, `clockres`, WMI OS/ComputerSystem overview
+- **CPU:** `coreinfo`, perf loop, top process usage
+- **RAM:** WMI memory details, `testlimit -m 100`, `\Memory\Pages/sec`
+- **Storage:** WMI disk overview, `du`, `streams`, `contig`, read/write test
+- **Processes:** `pslist`, `handle` (if present)
+- **Security:** `autorunsc` (if present)
+- **Network:** connection count via `netstat`
 
 ---
 
@@ -85,9 +96,16 @@ Admin rights are optional (some checks benefit from elevation). Reports include 
 
 ## 📈 Roadmap
 
-- **v1.1**: optional GPU/SMART checks; `-Skip*` flags (e.g., `-SkipStorage`, `-SkipSecurity`); tunable summary verbosity (e.g., `-MaxLinesPerTool`).
-- **v1.2**: basic HTML report export; compressed artifacts output folder; improved parsers for `sigcheck`, `handle`, `autorunsc`.
-- **v2.0**: minimal WPF/WinUI menu alternative; pluggable “module” system; JSON config for per-tool args; signed releases.
+- **v1.1**: optional GPU/SMART checks; `-Skip*` flags; tunable summary verbosity
+- **v1.2**: HTML report export; compressed output folder; improved parsers
+- **v2.0**:
+  - SID-based elevation logic (Home-safe)
+  - `/elevated` flag for UAC loop prevention
+  - Device-grouped test mode (`-AutoRunByDevice`)
+  - Launcher fallback to `SystemTester.ps1` if grouped script is missing
+  - WPF/WinUI menu alternative (planned)
+  - Pluggable module system; JSON config support
+  - Signed releases
 
 ---
 
@@ -100,25 +118,3 @@ PRs welcome for: additional parsers/cleaners, new modules (GPU, SMART, network t
 ## 🔒 Security
 
 For sensitive findings or potential security issues, contact `support@pnwcomputers.com`. Provide enough detail to reproduce; allow reasonable disclosure timelines.
-
----
-
-## 📄 License
-
-MIT — see `LICENSE`.
-
----
-
-## 📞 Support & Contact
-
-Documentation: this README.
-Bugs/Features: open an issue.
-General support: `support@pnwcomputers.com`.
-
----
-
-## 📊 Repo Stats
-
-![GitHub stars](https://img.shields.io/github/stars/Pnwcomputers/PortableSysinternalsTester) ![GitHub forks](https://img.shields.io/github/forks/Pnwcomputers/PortableSysinternalsTester) ![GitHub issues](https://img.shields.io/github/issues/Pnwcomputers/PortableSysinternalsTester) ![GitHub license](https://img.shields.io/github/license/Pnwcomputers/PortableSysinternalsTester)
-
-**🎯 Baseline any Windows machine in minutes—not hours.**
