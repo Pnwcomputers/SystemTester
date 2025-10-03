@@ -1,12 +1,18 @@
 # Simple Portable Sysinternals System Tester
 # Consolidated version with additional hardware/OS diagnostics
 # Created by Pacific Northwest Computers - 2025
-# Audited and Enhanced Version
+# Fully Audited and Corrected Version - v2.2
 
 param(
-    [string]$OutputPath = "",
     [switch]$AutoRun
 )
+
+# Constants
+$script:DXDIAG_TIMEOUT_SEC = 45
+$script:ENERGY_REPORT_DURATION = 60
+$script:UPDATE_SEARCH_TIMEOUT_SEC = 90
+$script:CPU_STRESS_DURATION_SEC = 10
+$script:MAX_PATH_LENGTH = 240  # Leave buffer before Windows 260 limit
 
 # Global variables
 $ScriptRoot       = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -14,15 +20,66 @@ $DriveRoot        = Split-Path -Qualifier $ScriptRoot
 $DriveLetter      = $DriveRoot.TrimEnd('\')
 $SysinternalsPath = Join-Path $ScriptRoot "Sysinternals"
 $script:TestResults = @()
+$script:IsAdmin = $false
 
 Write-Host "-------------------------------------" -ForegroundColor Green
-Write-Host "  PORTABLE SYSINTERNALS TESTER" -ForegroundColor Green
+Write-Host "  PORTABLE SYSINTERNALS TESTER v2.2" -ForegroundColor Green
 Write-Host "-------------------------------------" -ForegroundColor Green
 Write-Host "Running from: $DriveLetter" -ForegroundColor Cyan
+
+# Validate path length
+if ($ScriptRoot.Length -gt $script:MAX_PATH_LENGTH) {
+    Write-Host "WARNING: Script path is $($ScriptRoot.Length) characters long" -ForegroundColor Yellow
+    Write-Host "         Windows MAX_PATH limit is 260. Consider moving to shorter path." -ForegroundColor Yellow
+    Write-Host "         Current path: $ScriptRoot" -ForegroundColor Yellow
+    Start-Sleep -Seconds 3
+}
+
+# Check for administrator privileges
+function Test-AdminPrivileges {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        
+        if ($isAdmin) {
+            Write-Host "Administrator: YES" -ForegroundColor Green
+            $script:IsAdmin = $true
+        } else {
+            Write-Host "Administrator: NO (some tests will be limited)" -ForegroundColor Yellow
+            $script:IsAdmin = $false
+        }
+        return $isAdmin
+    } catch {
+        Write-Host "Could not determine admin status: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+# Test if CIM/WMI is available
+function Test-CimAvailability {
+    try {
+        $null = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        return $true
+    } catch {
+        Write-Host "ERROR: CIM/WMI service unavailable or corrupted" -ForegroundColor Red
+        Write-Host "       Many tests will fail. Try running: winmgmt /verifyrepository" -ForegroundColor Yellow
+        return $false
+    }
+}
 
 # Initialize environment
 function Initialize-Environment {
     Write-Host "Initializing..." -ForegroundColor Yellow
+
+    # Check admin status
+    Test-AdminPrivileges | Out-Null
+    
+    # Check CIM availability
+    if (-not (Test-CimAvailability)) {
+        Write-Host "WARNING: Continuing with limited functionality" -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+    }
 
     # Check for tools folder
     if (!(Test-Path $SysinternalsPath)) {
@@ -150,8 +207,20 @@ function Run-Tool {
     param(
         [string]$ToolName,
         [string]$Args = "",
-        [string]$Description = ""
+        [string]$Description = "",
+        [bool]$RequiresAdmin = $false
     )
+    
+    # Check if admin is required but not available
+    if ($RequiresAdmin -and -not $script:IsAdmin) {
+        Write-Host "SKIP: $ToolName requires administrator privileges" -ForegroundColor Yellow
+        $script:TestResults += @{
+            Tool=$ToolName; Description=$Description; Status="SKIPPED"
+            Output="Requires administrator privileges"; Duration=0
+        }
+        return
+    }
+    
     $toolPath = Join-Path $SysinternalsPath "$ToolName.exe"
     if (!(Test-Path $toolPath)) {
         Write-Host "SKIP: $ToolName not found" -ForegroundColor Yellow
@@ -180,19 +249,19 @@ function Run-Tool {
         if ($previewLines.Count -gt 0) {
             Write-Host "Preview: $($previewLines[0])" -ForegroundColor DarkGray
         }
-        Write-Host "OK: $ToolName completed in $([math]::Round($duration))ms (output cleaned)" -ForegroundColor Green
+        Write-Host "OK: $ToolName completed in $([math]::Round($duration))ms" -ForegroundColor Green
     }
     catch {
         $script:TestResults += @{
             Tool=$ToolName; Description=$Description; Status="FAILED"
-            Output=$_.Exception.Message; Duration=0
+            Output="Error: $($_.Exception.Message)"; Duration=0
         }
         Write-Host "ERROR: $ToolName failed - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
 # ----------------------------
-# Original test suites
+# Test Suites
 # ----------------------------
 function Test-SystemInfo {
     Write-Host "`n System Information " -ForegroundColor Green
@@ -217,7 +286,7 @@ Total RAM: $([math]::Round($cs.TotalPhysicalMemory / 1GB, 2)) GB
         }
         Write-Host "System overview collected" -ForegroundColor Green
     } catch { 
-        Write-Host "Could not get system overview: $($_.Exception.Message)" -ForegroundColor Red 
+        Write-Host "Error: Could not get system overview - $($_.Exception.Message)" -ForegroundColor Red 
     }
 }
 
@@ -244,13 +313,14 @@ Cache Size L3: $($cpu.L3CacheSize) KB
         }
         Write-Host "CPU details collected" -ForegroundColor Green
     } catch { 
-        Write-Host "Could not get CPU details: $($_.Exception.Message)" -ForegroundColor Red 
+        Write-Host "Error: Could not get CPU details - $($_.Exception.Message)" -ForegroundColor Red 
     }
 
-    Write-Host "Running CPU stress test (10 seconds)..." -ForegroundColor Yellow
+    Write-Host "Running CPU stress test ($script:CPU_STRESS_DURATION_SEC seconds - synthetic workload)..." -ForegroundColor Yellow
+    Write-Host "NOTE: This is a basic synthetic test, not representative of real-world performance" -ForegroundColor DarkYellow
     try {
         $startTime = Get-Date
-        $endTime = $startTime.AddSeconds(10)
+        $endTime = $startTime.AddSeconds($script:CPU_STRESS_DURATION_SEC)
         $counter = 0
         while ((Get-Date) -lt $endTime) {
             $counter++
@@ -259,13 +329,13 @@ Cache Size L3: $($cpu.L3CacheSize) KB
         $duration = ((Get-Date) - $startTime).TotalSeconds
         $opsPerSec = [math]::Round($counter / $duration)
         $script:TestResults += @{
-            Tool="CPU-Performance"; Description="CPU performance test (10 seconds)"
-            Status="SUCCESS"; Output="Operations completed: $counter`nDuration: $([math]::Round($duration,2)) seconds`nOperations per second: $opsPerSec"
+            Tool="CPU-Performance"; Description="CPU performance test ($script:CPU_STRESS_DURATION_SEC sec synthetic)"
+            Status="SUCCESS"; Output="Operations completed: $counter`nDuration: $([math]::Round($duration,2)) seconds`nOperations per second: $opsPerSec`n`nNOTE: Synthetic test - not indicative of real-world application performance"
             Duration=$duration * 1000
         }
         Write-Host "CPU performance test completed: $opsPerSec ops/sec" -ForegroundColor Green
     } catch { 
-        Write-Host "CPU performance test failed: $($_.Exception.Message)" -ForegroundColor Red 
+        Write-Host "Error: CPU performance test failed - $($_.Exception.Message)" -ForegroundColor Red 
     }
 
     try {
@@ -282,7 +352,7 @@ Cache Size L3: $($cpu.L3CacheSize) KB
         }
         Write-Host "CPU usage analysis completed" -ForegroundColor Green
     } catch { 
-        Write-Host "Could not analyze CPU usage: $($_.Exception.Message)" -ForegroundColor Red 
+        Write-Host "Error: Could not analyze CPU usage - $($_.Exception.Message)" -ForegroundColor Red 
     }
 }
 
@@ -322,11 +392,11 @@ Virtual Memory Available: $([math]::Round($os.FreeVirtualMemory / 1KB / 1GB, 2))
         }
         Write-Host "RAM details collected: $totalGB GB total, $usagePercent% used" -ForegroundColor Green
     } catch { 
-        Write-Host "Could not get detailed memory info: $($_.Exception.Message)" -ForegroundColor Red 
+        Write-Host "Error: Could not get detailed memory info - $($_.Exception.Message)" -ForegroundColor Red 
     }
 
     Write-Host "Running memory allocation test..." -ForegroundColor Yellow
-    Run-Tool -ToolName "testlimit" -Args "-m 100" -Description "Memory allocation test (100MB)"
+    Run-Tool -ToolName "testlimit" -Args "-m 100" -Description "Memory allocation test (100MB)" -RequiresAdmin $true
 
     try {
         $pagesSec = Get-Counter "\Memory\Pages/sec" -SampleInterval 1 -MaxSamples 3 -ErrorAction Stop
@@ -337,7 +407,7 @@ Virtual Memory Available: $([math]::Round($os.FreeVirtualMemory / 1KB / 1GB, 2))
         }
         Write-Host "Memory performance measured" -ForegroundColor Green
     } catch { 
-        Write-Host "Could not measure memory performance" -ForegroundColor Yellow 
+        Write-Host "Error: Could not measure memory performance - $($_.Exception.Message)" -ForegroundColor Yellow 
     }
 }
 
@@ -368,16 +438,16 @@ function Test-Storage {
         }
         Write-Host "Storage overview collected" -ForegroundColor Green
     } catch { 
-        Write-Host "Could not get storage overview: $($_.Exception.Message)" -ForegroundColor Red 
+        Write-Host "Error: Could not get storage overview - $($_.Exception.Message)" -ForegroundColor Red 
     }
 
     Run-Tool -ToolName "du"      -Args "-l 2 C:\"            -Description "Detailed disk usage analysis of C:"
-    Run-Tool -ToolName "streams" -Args "-s C:\Windows\System32" -Description "Check System32 for alternate data streams"
-    Run-Tool -ToolName "contig"  -Args "-a C:\"              -Description "Check C: drive fragmentation"
+    Run-Tool -ToolName "streams" -Args "-s C:\Windows\System32" -Description "Check System32 for alternate data streams" -RequiresAdmin $true
+    Run-Tool -ToolName "contig"  -Args "-a C:\"              -Description "Check C: drive fragmentation" -RequiresAdmin $true
 
     Write-Host "Running disk performance test..." -ForegroundColor Yellow
     try {
-        $testFile = Join-Path $env:TEMP "disktest.tmp"
+        $testFile = Join-Path $env:TEMP "disktest_$([guid]::NewGuid().ToString('N')).tmp"
         $testData = "0" * 1024 * 1024  # 1MB
 
         $writeStart = Get-Date
@@ -389,7 +459,12 @@ function Test-Storage {
         $readStart = Get-Date
         $content = Get-Content $testFile -Raw -ErrorAction Stop
         $readTime = ((Get-Date) - $readStart).TotalMilliseconds
-        Remove-Item $testFile -ErrorAction SilentlyContinue
+        
+        # Verify cleanup
+        Remove-Item $testFile -ErrorAction Stop
+        if (Test-Path $testFile) {
+            Write-Host "Warning: Temp file cleanup incomplete" -ForegroundColor Yellow
+        }
 
         $writeMBps = if ($writeTime -gt 0) { [math]::Round(10 / ($writeTime / 1000), 2) } else { 0 }
         $readMBps  = if ($readTime -gt 0)  { [math]::Round(10 / ($readTime / 1000), 2) } else { 0 }
@@ -401,7 +476,11 @@ function Test-Storage {
         }
         Write-Host "Disk performance: Write $writeMBps MB/s, Read $readMBps MB/s" -ForegroundColor Green
     } catch { 
-        Write-Host "Disk performance test failed: $($_.Exception.Message)" -ForegroundColor Red 
+        Write-Host "Error: Disk performance test failed - $($_.Exception.Message)" -ForegroundColor Red
+        # Attempt cleanup
+        if ($testFile -and (Test-Path $testFile)) {
+            Remove-Item $testFile -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -413,7 +492,7 @@ function Test-Processes {
 
 function Test-Security {
     Write-Host "`n Security Analysis " -ForegroundColor Green
-    Run-Tool -ToolName "autorunsc" -Args "-a -c" -Description "Autorun entries"
+    Run-Tool -ToolName "autorunsc" -Args "-a -c" -Description "Autorun entries" -RequiresAdmin $true
 }
 
 function Test-Network {
@@ -427,19 +506,28 @@ function Test-Network {
             Status="SUCCESS"; Output="Total connections: $connections"; Duration=50
         }
     } catch { 
-        Write-Host "Could not get network info: $($_.Exception.Message)" -ForegroundColor Red 
+        Write-Host "Error: Could not get network info - $($_.Exception.Message)" -ForegroundColor Red 
     }
 }
 
-# ----------------------------
-# Additional Diagnostics
-# ----------------------------
-
 function Test-OSHealth {
     Write-Host "`n OS Health (SFC/DISM) " -ForegroundColor Green
+    
+    if (-not $script:IsAdmin) {
+        Write-Host "SKIP: OS Health checks require administrator privileges" -ForegroundColor Yellow
+        $script:TestResults += @{
+            Tool="OS-Health"; Description="DISM + SFC integrity checks"
+            Status="SKIPPED"; Output="Requires administrator privileges"; Duration=0
+        }
+        return
+    }
+    
     try {
+        Write-Host "Running DISM ScanHealth (this may take 5-15 minutes)..." -ForegroundColor Yellow
         $start = Get-Date
         $dism = (dism /Online /Cleanup-Image /ScanHealth) 2>&1 | Out-String
+        
+        Write-Host "Running SFC scan (this may take 5-15 minutes)..." -ForegroundColor Yellow
         $sfc  = (sfc /scannow) 2>&1 | Out-String
         $dur  = ((Get-Date) - $start).TotalMilliseconds
 
@@ -456,9 +544,9 @@ function Test-OSHealth {
     } catch {
         $script:TestResults += @{
             Tool="OS-Health"; Description="DISM+SFC"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0
+            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0
         }
-        Write-Host "OS health scan failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Error: OS health scan failed - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
@@ -466,38 +554,62 @@ function Test-StorageSMART {
     Write-Host "`n Storage SMART / Reliability " -ForegroundColor Green
     try {
         $lines = @()
+        $dataFound = $false
+        $errors = @()
 
         # Modern storage stack (best effort)
         try {
             $pd = Get-PhysicalDisk -ErrorAction Stop
             foreach ($p in $pd) {
+                $dataFound = $true
                 $wear = $null
                 try { $wear = ($p | Select-Object -ExpandProperty Wear -ErrorAction Stop) } catch {}
+                $wearStr = if ($wear) { "$wear%" } else { "N/A" }
                 $lines += "{0} | Media={1} | Health={2} | LifeRemaining={3} | Usage={4}" -f `
-                    $p.FriendlyName, $p.MediaType, $p.HealthStatus, $wear, $p.Usage
+                    $p.FriendlyName, $p.MediaType, $p.HealthStatus, $wearStr, $p.Usage
             }
-        } catch {}
+        } catch {
+            $errors += "Modern storage API: $($_.Exception.Message)"
+        }
 
         try {
             $rc = Get-StorageReliabilityCounter -ErrorAction Stop
             foreach ($r in $rc) {
-                $lines += "RC: {0} | ReadErrors={1} | WriteErrors={2} | Temperature={3}C | Hours={4}" -f `
-                    $r.FriendlyName, $r.ReadErrorsTotal, $r.WriteErrorsTotal, $r.Temperature, $r.PowerOnHours
+                $dataFound = $true
+                $temp = if ($r.Temperature) { "$($r.Temperature)C" } else { "N/A" }
+                $hours = if ($r.PowerOnHours) { $r.PowerOnHours } else { "N/A" }
+                $lines += "RC: {0} | ReadErrors={1} | WriteErrors={2} | Temperature={3} | Hours={4}" -f `
+                    $r.FriendlyName, $r.ReadErrorsTotal, $r.WriteErrorsTotal, $temp, $hours
             }
-        } catch {}
+        } catch {
+            $errors += "Reliability counters: $($_.Exception.Message)"
+        }
 
         # Legacy WMI SMART
         try {
             $fail  = Get-CimInstance MSStorageDriver_FailurePredictStatus -Namespace root\wmi -ErrorAction Stop
             $disks = Get-CimInstance Win32_DiskDrive -ErrorAction Stop
             foreach ($f in $fail) {
+                $dataFound = $true
                 $model = ($disks | Where-Object { $_.PNPDeviceID -like "*"+$f.InstanceName.Split("_")[0]+"*" } | Select-Object -First 1).Model
                 $resolvedModel = if ($model) { $model } else { $f.InstanceName }
                 $lines += "SMART: $resolvedModel | PredictFailure=$($f.PredictFailure)"
             }
-        } catch {}
+        } catch {
+            $errors += "Legacy SMART: $($_.Exception.Message)"
+        }
 
-        if (-not $lines) { $lines = @("SMART/reliability data not exposed by driver") }
+        if (-not $dataFound) {
+            $lines = @("SMART/reliability data not available - possible reasons:")
+            $lines += "  - Drive controller does not expose SMART data"
+            $lines += "  - Storage driver limitations"
+            $lines += "  - Virtual machine environment"
+            $lines += "  - USB/external drive without SMART passthrough"
+            if ($errors.Count -gt 0) {
+                $lines += "`nTechnical errors encountered:"
+                $lines += $errors
+            }
+        }
 
         $script:TestResults += @{
             Tool="Storage-SMART"; Description="SMART & reliability (best effort)"
@@ -507,9 +619,9 @@ function Test-StorageSMART {
     } catch {
         $script:TestResults += @{
             Tool="Storage-SMART"; Description="SMART"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0
+            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0
         }
-        Write-Host "Storage SMART failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Error: Storage SMART failed - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
@@ -535,9 +647,9 @@ function Test-Trim {
     } catch {
         $script:TestResults += @{ 
             Tool="SSD-TRIM"; Description="TRIM"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
+            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0 
         }
-        Write-Host "TRIM check failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Error: TRIM check failed - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
@@ -563,27 +675,40 @@ function Test-NIC {
     } catch {
         $script:TestResults += @{ 
             Tool="NIC-Info"; Description="Adapters"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
+            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0 
         }
-        Write-Host "NIC check failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Error: NIC check failed - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
 function Test-GPU {
     Write-Host "`n GPU / DirectX (dxdiag) " -ForegroundColor Green
+    $dxProcess = $null
     try {
         $dx = Join-Path $env:TEMP "dxdiag_$([guid]::NewGuid().ToString('N')).txt"
-        & dxdiag /t $dx | Out-Null
         
-        # Wait for dxdiag to complete (it runs async)
-        $timeout = 30
+        Write-Host "Launching dxdiag (will wait up to $script:DXDIAG_TIMEOUT_SEC seconds)..." -ForegroundColor Yellow
+        $dxProcess = Start-Process -FilePath "dxdiag" -ArgumentList "/t",$dx -WindowStyle Hidden -PassThru
+        
+        # Improved timeout logic with faster polling
         $elapsed = 0
-        while (!(Test-Path $dx) -and $elapsed -lt $timeout) {
-            Start-Sleep -Seconds 1
-            $elapsed++
+        $pollInterval = 0.5
+        
+        while (!(Test-Path $dx) -and $elapsed -lt $script:DXDIAG_TIMEOUT_SEC) {
+            if ($dxProcess.HasExited) {
+                throw "dxdiag process exited prematurely"
+            }
+            Start-Sleep -Milliseconds ($pollInterval * 1000)
+            $elapsed += $pollInterval
+            if ($elapsed % 5 -eq 0) {
+                Write-Host "  Waiting for dxdiag... ($([math]::Round($elapsed))s elapsed)" -ForegroundColor DarkGray
+            }
         }
         
         if (Test-Path $dx) {
+            # Wait to ensure file is completely written
+            Start-Sleep -Seconds 1
+            
             $raw = Get-Content $dx -Raw -ErrorAction Stop
             Remove-Item $dx -ErrorAction SilentlyContinue
 
@@ -595,21 +720,37 @@ function Test-GPU {
                 Tool="GPU-DirectX"; Description="dxdiag summary"
                 Status="SUCCESS"; Output=($keep -join "`n"); Duration=($elapsed * 1000)
             }
-            Write-Host "dxdiag summary collected" -ForegroundColor Green
+            Write-Host "dxdiag summary collected ($([math]::Round($elapsed,1))s)" -ForegroundColor Green
         } else {
-            throw "dxdiag output file not created within timeout"
+            throw "dxdiag output file not created within $script:DXDIAG_TIMEOUT_SEC second timeout"
         }
     } catch {
         $script:TestResults += @{ 
             Tool="GPU-DirectX"; Description="dxdiag"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
+            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0 
         }
-        Write-Host "dxdiag failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Error: dxdiag failed - $($_.Exception.Message)" -ForegroundColor Red
+    } finally {
+        # Kill hanging dxdiag process if still running
+        if ($dxProcess -and !$dxProcess.HasExited) {
+            Write-Host "Terminating dxdiag process..." -ForegroundColor Yellow
+            try {
+                $dxProcess.Kill()
+                $dxProcess.WaitForExit(5000)
+            } catch {
+                Write-Host "Warning: Could not terminate dxdiag process" -ForegroundColor Yellow
+            }
+        }
     }
 }
 
 function Test-Power {
     Write-Host "`n Power/Battery " -ForegroundColor Green
+    
+    if (-not $script:IsAdmin) {
+        Write-Host "WARNING: Energy report requires administrator privileges" -ForegroundColor Yellow
+    }
+    
     try {
         $lines = @()
         try {
@@ -617,25 +758,44 @@ function Test-Power {
             foreach ($b in $bat) {
                 $lines += "Battery: Status=$($b.BatteryStatus) | Design=$($b.DesignCapacity) | FullCharge=$($b.FullChargeCapacity)"
             }
-            if (-not $bat) { $lines += "No battery reported (desktop?)" }
-        } catch { $lines += "No battery reported (desktop?)" }
+            if (-not $bat) { $lines += "No battery reported (desktop system)" }
+        } catch { $lines += "No battery reported (desktop system)" }
 
-        $report = Join-Path $ScriptRoot "energy-report.html"
-        Write-Host "Generating energy report (15 seconds)..." -ForegroundColor Yellow
-        powercfg /energy /output $report /duration 15 2>&1 | Out-Null
-        $lines += "Energy report: $report"
+        if ($script:IsAdmin) {
+            $report = Join-Path $ScriptRoot "energy-report.html"
+            Write-Host "Generating energy report ($script:ENERGY_REPORT_DURATION seconds)..." -ForegroundColor Yellow
+            Write-Host "NOTE: Using $script:ENERGY_REPORT_DURATION second duration (Windows default is 60s)" -ForegroundColor DarkYellow
+            
+            $energyStart = Get-Date
+            powercfg /energy /output $report /duration $script:ENERGY_REPORT_DURATION 2>&1 | Out-Null
+            $energyDuration = ((Get-Date) - $energyStart).TotalMilliseconds
+            
+            if (Test-Path $report) {
+                $lines += "Energy report generated: $report"
+                $lines += "Report duration: $script:ENERGY_REPORT_DURATION seconds"
+            } else {
+                $lines += "Energy report generation failed"
+            }
 
-        $script:TestResults += @{ 
-            Tool="Power-Energy"; Description="Battery & energy report"; 
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=16000 
+            $script:TestResults += @{ 
+                Tool="Power-Energy"; Description="Battery & energy report ($script:ENERGY_REPORT_DURATION`s)"; 
+                Status="SUCCESS"; Output=($lines -join "`n"); Duration=$energyDuration 
+            }
+        } else {
+            $lines += "Energy report skipped - requires administrator privileges"
+            $script:TestResults += @{ 
+                Tool="Power-Energy"; Description="Battery info only"; 
+                Status="PARTIAL"; Output=($lines -join "`n"); Duration=100 
+            }
         }
-        Write-Host "Power/energy report generated" -ForegroundColor Green
+        
+        Write-Host "Power/energy check completed" -ForegroundColor Green
     } catch {
         $script:TestResults += @{ 
             Tool="Power-Energy"; Description="powercfg"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
+            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0 
         }
-        Write-Host "Power report failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Error: Power report failed - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
@@ -654,7 +814,7 @@ function Test-HardwareEvents {
                 "[{0:yyyy-MM-dd HH:mm}] ID {1} {2}`n{3}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName,$msgLines
             }) -join "`n`n"
         } else {
-            $text = "No WHEA entries in last 7 days"
+            $text = "No WHEA entries in last 7 days (good - indicates stable hardware)"
         }
 
         $script:TestResults += @{ 
@@ -665,108 +825,181 @@ function Test-HardwareEvents {
     } catch {
         $script:TestResults += @{ 
             Tool="WHEA"; Description="Hardware events"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
+            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0 
         }
-        Write-Host "WHEA check failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Error: WHEA check failed - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
 function Test-WindowsUpdate {
     Write-Host "`n Windows Update Status " -ForegroundColor Green
+    $updateSession = $null
+    $updateSearcher = $null
+    
     try {
         $lines = @()
         
         # Check Windows Update service status
-        $wuService = Get-Service -Name wuauserv -ErrorAction Stop
-        $lines += "Windows Update Service: $($wuService.Status)"
-        
-        # Use COM object to check update status
-        $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
-        $updateSearcher = $updateSession.CreateUpdateSearcher()
-        
-        # Get last search time
         try {
-            $lastSearch = $updateSearcher.GetTotalHistoryCount()
-            if ($lastSearch -gt 0) {
-                $history = $updateSearcher.QueryHistory(0, 1)
-                $lastUpdate = $history | Select-Object -First 1
-                if ($lastUpdate -and $lastUpdate.Date) {
-                    $lines += "Last Update Check: $($lastUpdate.Date)"
-                }
-            }
+            $wuService = Get-Service -Name wuauserv -ErrorAction Stop
+            $lines += "Windows Update Service: $($wuService.Status)"
         } catch {
-            $lines += "Last Update Check: Unable to determine"
+            $lines += "Windows Update Service: Error - $($_.Exception.Message)"
         }
         
-        # Search for pending updates
-        Write-Host "Searching for pending updates (may take 30-60 seconds)..." -ForegroundColor Yellow
-        $searchStart = Get-Date
-        $searchResult = $updateSearcher.Search("IsInstalled=0 and Type='Software'")
-        $searchDuration = ((Get-Date) - $searchStart).TotalMilliseconds
-        
-        $pendingCount = $searchResult.Updates.Count
-        $lines += "Pending Updates: $pendingCount"
-        
-        if ($pendingCount -gt 0) {
-            $lines += "`nPending Updates List:"
-            $count = 0
-            foreach ($update in $searchResult.Updates) {
-                $count++
-                if ($count -le 10) {  # Limit to first 10
-                    $size = if ($update.MaxDownloadSize -gt 0) { 
-                        "$([math]::Round($update.MaxDownloadSize / 1MB, 1)) MB" 
-                    } else { "Unknown" }
-                    $lines += "  $count. $($update.Title) ($size)"
-                }
-            }
-            if ($pendingCount -gt 10) {
-                $lines += "  ... and $($pendingCount - 10) more"
-            }
-        }
-        
-        # Get recent update history (last 10)
+        # Use COM object to check update status with comprehensive error handling
         try {
-            $historyCount = $updateSearcher.GetTotalHistoryCount()
-            if ($historyCount -gt 0) {
-                $historyItems = $updateSearcher.QueryHistory(0, [Math]::Min(10, $historyCount))
-                $lines += "`nRecent Update History (Last 10):"
-                $count = 0
-                foreach ($item in $historyItems) {
-                    $count++
-                    $status = switch ($item.ResultCode) {
-                        1 { "In Progress" }
-                        2 { "Succeeded" }
-                        3 { "Succeeded with errors" }
-                        4 { "Failed" }
-                        5 { "Aborted" }
-                        default { "Unknown" }
+            Write-Host "Creating Windows Update session..." -ForegroundColor DarkGray
+            $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
+            $updateSearcher = $updateSession.CreateUpdateSearcher()
+            
+            # Get last search time
+            try {
+                $lastSearch = $updateSearcher.GetTotalHistoryCount()
+                if ($lastSearch -gt 0) {
+                    $history = $updateSearcher.QueryHistory(0, 1)
+                    $lastUpdate = $history | Select-Object -First 1
+                    if ($lastUpdate -and $lastUpdate.Date) {
+                        $lines += "Last Update Check: $($lastUpdate.Date)"
                     }
-                    $dateStr = if ($item.Date) { $item.Date.ToString('yyyy-MM-dd') } else { "Unknown" }
-                    $lines += "  $count. [$dateStr] $status - $($item.Title)"
+                } else {
+                    $lines += "Last Update Check: No history available"
                 }
+            } catch {
+                $lines += "Last Update Check: Error - $($_.Exception.Message)"
             }
+            
+            # Search for pending updates with timeout protection
+            Write-Host "Searching for pending updates (may take $script:UPDATE_SEARCH_TIMEOUT_SEC seconds)..." -ForegroundColor Yellow
+            $searchStart = Get-Date
+            
+            try {
+                $searchResult = $updateSearcher.Search("IsInstalled=0 and Type='Software'")
+                $searchDuration = ((Get-Date) - $searchStart).TotalMilliseconds
+                
+                $pendingCount = $searchResult.Updates.Count
+                $lines += "Pending Updates: $pendingCount"
+                
+                if ($pendingCount -gt 0) {
+                    $lines += "`nPending Updates List:"
+                    $count = 0
+                    foreach ($update in $searchResult.Updates) {
+                        $count++
+                        if ($count -le 10) {
+                            $size = if ($update.MaxDownloadSize -gt 0) { 
+                                "$([math]::Round($update.MaxDownloadSize / 1MB, 1)) MB" 
+                            } else { "Unknown" }
+                            $lines += "  $count. $($update.Title) ($size)"
+                        }
+                    }
+                    if ($pendingCount -gt 10) {
+                        $lines += "  ... and $($pendingCount - 10) more"
+                    }
+                }
+            } catch {
+                $errorMsg = $_.Exception.Message
+                $lines += "Pending Updates: Search failed - $errorMsg"
+                
+                # Provide specific guidance based on error type
+                if ($errorMsg -match "0x80240024|0x80240438") {
+                    $lines += "  Possible cause: Windows Update service not running or corrupt"
+                    $lines += "  Try: Run 'services.msc' and start Windows Update service"
+                } elseif ($errorMsg -match "0x8024402C") {
+                    $lines += "  Possible cause: Network connectivity issue"
+                } elseif ($errorMsg -match "access|permission") {
+                    $lines += "  Possible cause: Insufficient permissions"
+                }
+                
+                $searchDuration = ((Get-Date) - $searchStart).TotalMilliseconds
+            }
+            
+            # Get recent update history (last 10)
+            try {
+                $historyCount = $updateSearcher.GetTotalHistoryCount()
+                if ($historyCount -gt 0) {
+                    $historyItems = $updateSearcher.QueryHistory(0, [Math]::Min(10, $historyCount))
+                    $lines += "`nRecent Update History (Last 10):"
+                    $count = 0
+                    foreach ($item in $historyItems) {
+                        $count++
+                        $status = switch ($item.ResultCode) {
+                            1 { "In Progress" }
+                            2 { "Succeeded" }
+                            3 { "Succeeded with errors" }
+                            4 { "Failed" }
+                            5 { "Aborted" }
+                            default { "Unknown ($($item.ResultCode))" }
+                        }
+                        $dateStr = if ($item.Date) { $item.Date.ToString('yyyy-MM-dd') } else { "Unknown" }
+                        $lines += "  $count. [$dateStr] $status - $($item.Title)"
+                    }
+                } else {
+                    $lines += "`nRecent Update History: No history available"
+                }
+            } catch {
+                $lines += "`nRecent Update History: Error - $($_.Exception.Message)"
+            }
+            
+            $script:TestResults += @{
+                Tool="Windows-Update"; Description="Windows Update status and pending updates"
+                Status="SUCCESS"; Output=($lines -join "`n"); Duration=$searchDuration
+            }
+            Write-Host "Windows Update check complete" -ForegroundColor Green
+            
         } catch {
-            $lines += "Unable to retrieve update history"
+            # COM object creation or major failure
+            $errorMsg = $_.Exception.Message
+            $lines += "`nCOM Error: $errorMsg"
+            $lines += "`nTroubleshooting:"
+            $lines += "  1. Verify Windows Update service is running (services.msc)"
+            $lines += "  2. Try running: wuauclt /detectnow"
+            $lines += "  3. Check if Windows Update is blocked by policy"
+            $lines += "  4. Run Windows Update troubleshooter"
+            
+            $script:TestResults += @{
+                Tool="Windows-Update"; Description="Windows Update status"
+                Status="FAILED"; Output=($lines -join "`n"); Duration=0
+            }
+            Write-Host "Error: Windows Update check failed - $errorMsg" -ForegroundColor Red
         }
-        
-        $script:TestResults += @{
-            Tool="Windows-Update"; Description="Windows Update status and pending updates"
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=$searchDuration
-        }
-        Write-Host "Windows Update check complete: $pendingCount pending updates" -ForegroundColor Green
         
     } catch {
         $script:TestResults += @{
             Tool="Windows-Update"; Description="Windows Update status"
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0
+            Status="FAILED"; Output="Unexpected error: $($_.Exception.Message)"; Duration=0
         }
-        Write-Host "Windows Update check failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Error: Windows Update check failed - $($_.Exception.Message)" -ForegroundColor Red
+    } finally {
+        # Release COM objects to prevent memory leaks
+        if ($updateSearcher) {
+            try {
+                [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null
+            } catch {}
+        }
+        if ($updateSession) {
+            try {
+                [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null
+            } catch {}
+        }
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
     }
 }
 
 # Generate comprehensive report
 function Generate-Report {
-    Write-Host "`nGenerating Clean Report..." -ForegroundColor Cyan
+    Write-Host "`nGenerating Reports..." -ForegroundColor Cyan
+    
+    # Test if script directory is writable
+    $testFile = Join-Path $ScriptRoot "writetest_$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        "test" | Out-File -FilePath $testFile -ErrorAction Stop
+        Remove-Item $testFile -ErrorAction Stop
+    } catch {
+        Write-Host "ERROR: Cannot write to script directory: $ScriptRoot" -ForegroundColor Red
+        Write-Host "       Check permissions or available disk space" -ForegroundColor Yellow
+        return
+    }
 
     $timestamp   = Get-Date -Format "yyyyMMdd_HHmmss"
     $reportPath  = Join-Path $ScriptRoot "SystemTest_Clean_$timestamp.txt"
@@ -775,16 +1008,19 @@ function Generate-Report {
     $report = @()
     $report += "---------------------------------"
     $report += "  SYSTEM TEST REPORT (CLEANED)"
+    $report += "  Version 2.2"
     $report += "---------------------------------"
     $report += "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
     $report += "Computer: $env:COMPUTERNAME"
     $report += "User: $env:USERNAME"
+    $report += "Administrator: $(if ($script:IsAdmin) { 'YES' } else { 'NO' })"
     $report += "Drive: $DriveLetter"
     $report += "Tools Location: $SysinternalsPath"
     $report += ""
 
     $successCount = ($TestResults | Where-Object { $_.Status -eq "SUCCESS" }).Count
     $failedCount  = ($TestResults | Where-Object { $_.Status -eq "FAILED"  }).Count
+    $skippedCount = ($TestResults | Where-Object { $_.Status -eq "SKIPPED" }).Count
     $totalCount   = $TestResults.Count
     if ($totalCount -gt 0) {
         $successRate = [math]::Round(($successCount / $totalCount) * 100, 1)
@@ -801,6 +1037,7 @@ function Generate-Report {
     $report += "Total Tests Run: $totalCount"
     $report += "Successful: $successCount"
     $report += "Failed: $failedCount"
+    $report += "Skipped: $skippedCount"
     $report += "Success Rate: $successRate%"
     $report += "Total Test Time: $([math]::Round($totalTime/1000,1)) seconds"
     $report += ""
@@ -818,7 +1055,7 @@ function Generate-Report {
     $cpuPerf = $TestResults | Where-Object { $_.Tool -eq "CPU-Performance" }
     if ($cpuPerf -and $cpuPerf.Output -match "Operations per second: (\d+)") {
         $report += "CPU PERFORMANCE:"
-        $report += "  Operations/sec: $($matches[1])"
+        $report += "  Operations/sec: $($matches[1]) (synthetic test)"
     }
 
     $ramInfo = $TestResults | Where-Object { $_.Tool -eq "RAM-Details" }
@@ -837,7 +1074,9 @@ function Generate-Report {
 
     $osHealth = $TestResults | Where-Object { $_.Tool -eq "OS-Health" }
     if ($osHealth) {
-        if ($osHealth.Output -match "repairable|corrupt|could not perform") {
+        if ($osHealth.Status -eq "SKIPPED") {
+            $report += "OS HEALTH: Skipped (requires admin)"
+        } elseif ($osHealth.Output -match "repairable|corrupt|could not perform") {
             $report += "OS HEALTH: Issues detected (see detailed section)"
         } else {
             $report += "OS HEALTH: No component store corruption"
@@ -873,7 +1112,7 @@ function Generate-Report {
         if ($result.Output -and $result.Output.Trim()) {
             $cleanOutput = $result.Output -split "`n" |
                            Where-Object { $_ -notmatch "^\s*$|^-+$|^=+$" } |
-                           Select-Object -First 15
+                           Select-Object -First 25
             if ($cleanOutput.Count -gt 0) {
                 $report += "Results:"
                 foreach ($line in $cleanOutput) { $report += "  $line" }
@@ -890,44 +1129,53 @@ function Generate-Report {
 
     if ($ramInfo -and $ramInfo.Output -match "Usage: ([\d\.]+)%") {
         $memUsage = [float]$matches[1]
-        if ($memUsage -gt 80) { 
-            $recommendations += "HIGH MEMORY USAGE ($memUsage%) - Consider adding more RAM or closing unnecessary programs" 
+        if ($memUsage -gt 85) { 
+            $recommendations += "CRITICAL: HIGH MEMORY USAGE ($memUsage%) - Consider adding more RAM or closing unnecessary programs" 
+        } elseif ($memUsage -gt 75) {
+            $recommendations += "WARNING: Elevated memory usage ($memUsage%) - Monitor for performance issues"
         } elseif ($memUsage -lt 30) { 
-            $recommendations += "LOW MEMORY USAGE ($memUsage%) - System has plenty of available RAM" 
+            $recommendations += "GOOD: LOW MEMORY USAGE ($memUsage%) - System has plenty of available RAM" 
         }
     }
 
     if ($cpuPerf -and $cpuPerf.Output -match "Operations per second: (\d+)") {
         $opsPerSec = [int]$matches[1]
         if ($opsPerSec -lt 10000) { 
-            $recommendations += "CPU PERFORMANCE - Consider checking for background processes or CPU throttling" 
+            $recommendations += "INFO: CPU performance test shows $opsPerSec ops/sec - Consider checking for background processes or CPU throttling" 
         }
     }
 
     if ($diskPerf -and $diskPerf.Output -match "Write Speed: ([\d\.]+) MB/s") {
         $writeSpeed = [float]$matches[1]
         if ($writeSpeed -lt 50) { 
-            $recommendations += "SLOW DISK WRITE SPEED ($writeSpeed MB/s) - Consider disk defragmentation or SSD upgrade" 
+            $recommendations += "WARNING: SLOW DISK WRITE SPEED ($writeSpeed MB/s) - Consider disk defragmentation or SSD upgrade" 
         }
     }
 
     if ($smart -and ($smart.Output -match "PredictFailure\s*=\s*True")) {
-        $recommendations += "SMART PREDICTIVE FAILURE - Backup and replace affected drive ASAP"
+        $recommendations += "CRITICAL: SMART PREDICTIVE FAILURE - Backup and replace affected drive IMMEDIATELY"
     }
 
+    $trim = $TestResults | Where-Object { $_.Tool -eq "SSD-TRIM" }
     if ($trim -and ($trim.Output -match "Disabled")) {
-        $recommendations += "ENABLE SSD TRIM - Improves SSD performance and wear leveling"
+        $recommendations += "RECOMMENDATION: ENABLE SSD TRIM - Improves SSD performance and wear leveling"
     }
 
     if ($whea -and ($whea.Output -notmatch "No WHEA entries")) {
-        $recommendations += "WHEA ERRORS - Investigate CPU/RAM/PCIe stability, drivers, and thermals"
+        $recommendations += "WARNING: WHEA ERRORS - Investigate CPU/RAM/PCIe stability, drivers, and thermals"
     }
 
     if ($winUpdate -and ($winUpdate.Output -match "Pending Updates: (\d+)")) {
         $pendingUpdates = [int]$matches[1]
-        if ($pendingUpdates -gt 10) {
-            $recommendations += "WINDOWS UPDATES - $pendingUpdates updates pending, consider updating soon"
+        if ($pendingUpdates -gt 20) {
+            $recommendations += "RECOMMENDATION: WINDOWS UPDATES - $pendingUpdates updates pending, install soon for security"
+        } elseif ($pendingUpdates -gt 0) {
+            $recommendations += "INFO: $pendingUpdates Windows updates available"
         }
+    }
+
+    if ($skippedCount -gt 0) {
+        $recommendations += "NOTE: $skippedCount tests were skipped (likely due to missing admin privileges)"
     }
 
     if ($recommendations.Count -eq 0) {
@@ -936,17 +1184,19 @@ function Generate-Report {
     
     foreach ($rec in $recommendations) {
         $report += "• $rec"
-        if ($rec -match "FAILURE|FAILED|ERROR|CRITICAL|ASAP") {
+        if ($rec -match "CRITICAL:|FAILURE|FAILED|IMMEDIATELY") {
             Write-Host "• $rec" -ForegroundColor Red
-        } elseif ($rec -match "WARNING|WHEA|TRIM|HIGH MEMORY USAGE|SLOW DISK|pending") {
+        } elseif ($rec -match "WARNING:|WHEA|TRIM|HIGH MEMORY USAGE|SLOW DISK") {
             Write-Host "• $rec" -ForegroundColor Yellow
-        } else {
+        } elseif ($rec -match "GOOD:|RECOMMENDATION:") {
             Write-Host "• $rec" -ForegroundColor Green
+        } else {
+            Write-Host "• $rec" -ForegroundColor Cyan
         }
     }
 
     $report += ""
-    $report += "Report generated by Portable Sysinternals Tester"
+    $report += "Report generated by Portable Sysinternals Tester v2.2"
     $report += "For detailed output, see: $detailedPath"
 
     try {
@@ -957,6 +1207,7 @@ function Generate-Report {
         $detailedReport += "DETAILED SYSTEM TEST REPORT"
         $detailedReport += "---------------------------"
         $detailedReport += "Generated: $(Get-Date)"
+        $detailedReport += "Script Version: 2.2"
         $detailedReport += ""
 
         foreach ($result in $TestResults) {
@@ -1017,28 +1268,29 @@ function Generate-Report {
     }
 }
 
-# Menu with Windows Update added
+# Menu
 function Show-Menu {
     Clear-Host
     Write-Host "-------------------------------------" -ForegroundColor Cyan
-    Write-Host "    PORTABLE SYSINTERNALS TESTER" -ForegroundColor Cyan
+    Write-Host "  PORTABLE SYSINTERNALS TESTER v2.2" -ForegroundColor Cyan
     Write-Host "-------------------------------------" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Drive: $DriveLetter | Computer: $env:COMPUTERNAME" -ForegroundColor Gray
+    Write-Host "Admin: $(if ($script:IsAdmin) { 'YES' } else { 'NO (limited)' })" -ForegroundColor $(if ($script:IsAdmin) { 'Green' } else { 'Yellow' })
     Write-Host ""
     Write-Host "1.  System Information Tests" -ForegroundColor White
     Write-Host "2.  CPU Testing (Performance & Info)" -ForegroundColor White
     Write-Host "3.  RAM Testing (Memory Analysis)" -ForegroundColor White
     Write-Host "4.  Hard Drive/SSD Testing" -ForegroundColor White
     Write-Host "5.  Process Analysis Tests" -ForegroundColor White
-    Write-Host "6.  Security Analysis Tests" -ForegroundColor White
+    Write-Host "6.  Security Analysis Tests $(if (-not $script:IsAdmin) { '[Requires Admin]' } else { '' })" -ForegroundColor White
     Write-Host "7.  Network Analysis Tests" -ForegroundColor White
-    Write-Host "8.  OS Health (DISM/SFC)" -ForegroundColor White
+    Write-Host "8.  OS Health (DISM/SFC) $(if (-not $script:IsAdmin) { '[Requires Admin]' } else { '' })" -ForegroundColor White
     Write-Host "9.  Storage SMART / Reliability" -ForegroundColor White
     Write-Host "10. SSD TRIM Status" -ForegroundColor White
     Write-Host "11. NIC Snapshot (Link/Speed/IP)" -ForegroundColor White
     Write-Host "12. GPU / DirectX (dxdiag summary)" -ForegroundColor White
-    Write-Host "13. Power/Battery + Energy Report" -ForegroundColor White
+    Write-Host "13. Power/Battery + Energy Report $(if (-not $script:IsAdmin) { '[Limited]' } else { '' })" -ForegroundColor White
     Write-Host "14. Hardware Error Events (WHEA)" -ForegroundColor White
     Write-Host "15. Windows Update Status" -ForegroundColor White
     Write-Host "16. Run ALL Tests" -ForegroundColor Yellow
@@ -1071,6 +1323,10 @@ function Start-Menu {
             "15" { Test-WindowsUpdate;    Read-Host "`nPress Enter to continue" }
             "16" {
                 Write-Host "`nRunning ALL tests..." -ForegroundColor Yellow
+                if (-not $script:IsAdmin) {
+                    Write-Host "WARNING: Running without admin privileges - some tests will be skipped" -ForegroundColor Yellow
+                    Start-Sleep -Seconds 2
+                }
                 Test-SystemInfo
                 Test-CPU
                 Test-Memory
@@ -1093,13 +1349,13 @@ function Start-Menu {
             "18" {
                 $script:TestResults = @()
                 Write-Host "Results cleared." -ForegroundColor Green
-                Start-Sleep 1
+                Start-Sleep -Seconds 1
             }
             "Q" { return }
             "q" { return }
             default {
                 Write-Host "Invalid choice. Try again." -ForegroundColor Red
-                Start-Sleep 1
+                Start-Sleep -Seconds 1
             }
         }
     } while ($choice -ne "Q" -and $choice -ne "q")
@@ -1107,7 +1363,7 @@ function Start-Menu {
 
 # Main execution
 try {
-    Write-Host "Starting Sysinternals Tester..." -ForegroundColor Green
+    Write-Host "Starting Sysinternals Tester v2.2..." -ForegroundColor Green
 
     if (!(Initialize-Environment)) {
         Write-Host "`nSetup required before running tests." -ForegroundColor Red
@@ -1117,6 +1373,10 @@ try {
 
     if ($AutoRun) {
         Write-Host "`nAuto-running all tests..." -ForegroundColor Yellow
+        if (-not $script:IsAdmin) {
+            Write-Host "WARNING: Running without admin privileges - some tests will be skipped" -ForegroundColor Yellow
+            Start-Sleep -Seconds 2
+        }
         Test-SystemInfo
         Test-CPU
         Test-Memory
@@ -1143,12 +1403,15 @@ try {
     Write-Host "`nSession completed successfully!" -ForegroundColor Green
 }
 catch {
-    Write-Host "`nERROR: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "`nCRITICAL ERROR: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "Line: $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Yellow
+    Write-Host "Stack Trace:" -ForegroundColor Yellow
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
     Read-Host "Press Enter to exit"
+    exit 1
 }
 finally {
-    Write-Host "Thank you for using Portable Sysinternals Tester!" -ForegroundColor Cyan
+    Write-Host "Thank you for using Portable Sysinternals Tester v2.2!" -ForegroundColor Cyan
     if ($TestResults.Count -gt 0) {
         Write-Host "Total tests run: $($TestResults.Count)" -ForegroundColor Gray
     }
