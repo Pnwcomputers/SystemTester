@@ -1,1155 +1,708 @@
-# Simple Portable Sysinternals System Tester
-# Consolidated version with additional hardware/OS diagnostics
-# Created by Pacific Northwest Computers - 2025
-# Audited and Enhanced Version
+@echo off
+setlocal enableextensions enabledelayedexpansion
 
-param(
-    [string]$OutputPath = "",
-    [switch]$AutoRun
+:: =====================================================
+:: Portable Sysinternals System Tester Launcher
+:: Created by Pacific Northwest Computers - 2025
+:: Audited and Enhanced Version
+:: =====================================================
+
+:: =====================================================
+:: Stable self-elevation (no infinite loops, Home-safe)
+::   - Checks Local Admin SID instead of relying on
+::     Server service (net session) which can be disabled
+:: =====================================================
+set "_ELEV_FLAG=%~1"
+
+:: Check if running as administrator by looking for admin group SID
+whoami /groups 2>nul | findstr /c:"S-1-5-32-544" >nul 2>&1
+if errorlevel 1 (
+    :: Not elevated - check if this is a re-launch attempt
+    if /i "%_ELEV_FLAG%"=="/elevated" (
+        echo.
+        echo [ERROR] Elevation failed or was cancelled.
+        echo         Right-click this file and choose "Run as administrator".
+        echo         Or check User Account Control settings.
+        echo.
+        pause
+        exit /b 1
+    )
+    
+    :: First attempt - request elevation
+    echo.
+    echo ========================================================
+    echo   Administrative privileges required for full testing
+    echo ========================================================
+    echo.
+    echo Some tests require administrator rights:
+    echo   - DISM and SFC integrity checks
+    echo   - Energy/battery report generation
+    echo   - Hardware SMART data access
+    echo   - System file verification
+    echo.
+    echo Requesting elevation...
+    echo.
+    
+    :: Use PowerShell to elevate (more reliable than runas)
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs -WindowStyle Normal"
+    
+    if errorlevel 1 (
+        echo [ERROR] Failed to request elevation.
+        echo         Please run this file as administrator manually.
+        pause
+    )
+    exit /b
 )
 
-# Global variables
-$ScriptRoot       = Split-Path -Parent $MyInvocation.MyCommand.Path
-$DriveRoot        = Split-Path -Qualifier $ScriptRoot
-$DriveLetter      = $DriveRoot.TrimEnd('\')
-$SysinternalsPath = Join-Path $ScriptRoot "Sysinternals"
-$script:TestResults = @()
+:: =====================================================
+:: We're elevated from here on
+:: =====================================================
+title Portable Sysinternals System Tester Launcher
+color 0B
 
-Write-Host "-------------------------------------" -ForegroundColor Green
-Write-Host "  PORTABLE SYSINTERNALS TESTER" -ForegroundColor Green
-Write-Host "-------------------------------------" -ForegroundColor Green
-Write-Host "Running from: $DriveLetter" -ForegroundColor Cyan
+:: Work from the script folder (prevents System32 drift on elevation)
+cd /d "%~dp0" 2>nul
+if errorlevel 1 (
+    echo [ERROR] Cannot change to script directory: %~dp0
+    echo         Check permissions and path length.
+    pause
+    exit /b 1
+)
 
-# Initialize environment
-function Initialize-Environment {
-    Write-Host "Initializing..." -ForegroundColor Yellow
+echo ========================================================
+echo      PORTABLE SYSINTERNALS SYSTEM TESTER LAUNCHER
+echo ========================================================
+echo.
 
-    # Check for tools folder
-    if (!(Test-Path $SysinternalsPath)) {
-        Write-Host "ERROR: Sysinternals folder not found!" -ForegroundColor Red
-        Write-Host "Please create folder: $SysinternalsPath" -ForegroundColor Yellow
-        Write-Host "And copy Sysinternals tools there." -ForegroundColor Yellow
-        return $false
-    }
+:: Resolve script directory and drive letter
+set "SCRIPT_DIR=%cd%"
+set "DRIVE_LETTER=%~d0"
 
-    # Expanded CLI tools list (best-effort; some optional)
-    $keyTools = @(
-        "psinfo.exe","coreinfo.exe","pslist.exe","testlimit.exe",
-        "du.exe","streams.exe","handle.exe","autorunsc.exe",
-        "sigcheck.exe","contig.exe","diskext.exe","listdlls.exe","clockres.exe"
+:: Construct path to PowerShell script
+set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
+
+echo Running from: %DRIVE_LETTER%
+echo Script directory: %SCRIPT_DIR%
+echo PowerShell script: %SCRIPT_PS1%
+echo.
+
+:: Validate the PowerShell script exists
+if not exist "%SCRIPT_PS1%" (
+    echo [ERROR] PowerShell script not found.
+    echo         Expected: %SCRIPT_PS1%
+    echo.
+    echo Please ensure SystemTester.ps1 is in the same folder as this launcher.
+    echo.
+    pause
+    exit /b 1
+)
+
+:: Check PowerShell availability and version
+echo Checking PowerShell availability...
+powershell -NoProfile -Command "$PSVersionTable.PSVersion.ToString()" >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] PowerShell is not available on this system.
+    echo         This launcher requires Windows PowerShell 5.1 or later.
+    echo.
+    echo Please install Windows Management Framework 5.1 or later.
+    echo.
+    pause
+    exit /b 1
+)
+
+:: Get and display PowerShell version
+for /f "tokens=*" %%v in ('powershell -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"') do (
+    set "PS_VERSION=%%v"
+)
+echo PowerShell version: %PS_VERSION%
+echo.
+
+:: Check if Sysinternals folder exists
+if not exist "%SCRIPT_DIR%\Sysinternals" (
+    echo [WARNING] Sysinternals folder not found!
+    echo           Expected location: %SCRIPT_DIR%\Sysinternals\
+    echo.
+    echo You can download the tools automatically using Menu Option 6.
+    echo.
+    timeout /t 3 >nul
+)
+
+:MENU
+cls
+echo ========================================================
+echo      PORTABLE SYSINTERNALS SYSTEM TESTER LAUNCHER
+echo ========================================================
+echo.
+echo Drive: %DRIVE_LETTER% ^| Directory: %SCRIPT_DIR%
+echo PowerShell Version: %PS_VERSION%
+echo Status: Running with Administrator privileges
+echo.
+echo --------------------------------------------------------
+echo                    MAIN MENU
+echo --------------------------------------------------------
+echo.
+echo 1. Run with Interactive Menu (Recommended)
+echo 2. Run ALL Tests Automatically
+echo 3. Generate Report from Previous Test Results
+echo 4. Fix PowerShell Execution Policy (CurrentUser)
+echo 5. Verify Sysinternals Tools Installation
+echo 6. Download/Update Sysinternals Suite (Auto)
+echo 7. Show Help / Troubleshooting
+echo 8. Exit
+echo.
+echo --------------------------------------------------------
+set /p "choice=Choose an option (1-8): "
+
+:: Validate input is a number between 1-8
+echo %choice%| findstr /r "^[1-8]$" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Invalid choice. Please enter a number between 1 and 8.
+    timeout /t 2 >nul
+    goto MENU
+)
+
+if "%choice%"=="1" goto INTERACTIVE
+if "%choice%"=="2" goto AUTORUN
+if "%choice%"=="3" goto REPORT_ONLY
+if "%choice%"=="4" goto FIXPOLICY
+if "%choice%"=="5" goto VERIFY_TOOLS
+if "%choice%"=="6" goto DOWNLOAD_TOOLS
+if "%choice%"=="7" goto HELP
+if "%choice%"=="8" goto EXIT
+
+:: Fallback (should never reach here due to validation)
+echo Invalid choice. Please try again.
+timeout /t 2 >nul
+goto MENU
+
+:INTERACTIVE
+echo.
+echo ========================================================
+echo              STARTING INTERACTIVE MODE
+echo ========================================================
+echo.
+echo The interactive menu allows you to:
+echo   - Select individual tests to run
+echo   - View test categories before running
+echo   - Generate reports when ready
+echo.
+echo Press any key to launch...
+pause >nul
+echo.
+
+:: Set environment variable to indicate launcher is being used
+set "SYSTESTER_LAUNCHER=2.0"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%"
+
+:: Clear the variable after execution
+set "SYSTESTER_LAUNCHER="
+
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Script encountered an error (exit code: %errorlevel%).
+    echo         Check the output above for details.
+    echo.
+    pause
+) else (
+    echo.
+    echo Script completed successfully.
+    timeout /t 2 >nul
+)
+goto MENU
+
+:AUTORUN
+echo.
+echo ========================================================
+echo           RUNNING ALL TESTS AUTOMATICALLY
+echo ========================================================
+echo.
+echo This will run the following test suites:
+echo   1. System Information
+echo   2. CPU Testing (Performance and Info)
+echo   3. RAM Testing (Memory Analysis)
+echo   4. Hard Drive/SSD Testing
+echo   5. Process Analysis
+echo   6. Security Analysis
+echo   7. Network Analysis
+echo   8. OS Health (DISM/SFC)
+echo   9. Storage SMART / Reliability
+echo  10. SSD TRIM Status
+echo  11. NIC Snapshot
+echo  12. GPU / DirectX
+echo  13. Power/Battery + Energy Report
+echo  14. Hardware Error Events (WHEA)
+echo  15. Windows Update Status
+echo.
+echo This may take several minutes depending on your system.
+echo A report will be generated automatically when complete.
+echo.
+echo Press any key to start, or Ctrl+C to cancel...
+pause >nul
+echo.
+
+:: Set environment variable to indicate launcher is being used
+set "SYSTESTER_LAUNCHER=2.0"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -AutoRun
+
+:: Clear the variable after execution
+set "SYSTESTER_LAUNCHER="
+
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Script encountered an error (exit code: %errorlevel%).
+    echo         Check the output above for details.
+    echo.
+    pause
+) else (
+    echo.
+    echo All tests completed successfully.
+    echo Check the script directory for generated reports.
+    timeout /t 3 >nul
+)
+goto MENU
+
+:REPORT_ONLY
+echo.
+echo ========================================================
+echo         GENERATE REPORT FROM PREVIOUS RESULTS
+echo ========================================================
+echo.
+echo This option is only useful if you have run tests in the
+echo current PowerShell session without generating a report.
+echo.
+echo If you haven't run any tests yet, this will show an error.
+echo.
+echo Press any key to continue, or Ctrl+C to cancel...
+pause >nul
+echo.
+
+:: Run script with a custom parameter to just generate report
+:: Note: This requires the PowerShell script to retain results
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "Write-Host 'Note: This feature requires keeping the PowerShell window open.' -ForegroundColor Yellow; Write-Host 'If you closed the test window, please run tests again.' -ForegroundColor Yellow; Start-Sleep -Seconds 3"
+
+echo.
+echo To use this feature properly:
+echo   1. Keep the PowerShell test window open
+echo   2. Run your desired tests
+echo   3. Select option to generate report
+echo.
+pause
+goto MENU
+
+:FIXPOLICY
+echo.
+echo ========================================================
+echo          FIXING POWERSHELL EXECUTION POLICY
+echo ========================================================
+echo.
+echo Current execution policy will be changed to RemoteSigned
+echo for the CurrentUser scope. This allows locally created
+echo scripts to run without being signed.
+echo.
+echo This is safe and only affects your user account.
+echo.
+echo Press any key to continue, or Ctrl+C to cancel...
+pause >nul
+echo.
+
+:: Show current policy first
+echo Current Execution Policy:
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ExecutionPolicy -List | Format-Table -AutoSize"
+echo.
+
+:: Set new policy
+echo Setting CurrentUser policy to RemoteSigned...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction Stop; Write-Host 'SUCCESS: Execution policy updated successfully!' -ForegroundColor Green } catch { Write-Host 'ERROR: Failed to update policy - ' $_.Exception.Message -ForegroundColor Red }"
+
+echo.
+echo New Execution Policy:
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ExecutionPolicy -List | Format-Table -AutoSize"
+echo.
+pause
+goto MENU
+
+:VERIFY_TOOLS
+echo.
+echo ========================================================
+echo       VERIFYING SYSINTERNALS TOOLS INSTALLATION
+echo ========================================================
+echo.
+
+set "SYSINT_DIR=%SCRIPT_DIR%\Sysinternals"
+
+if not exist "%SYSINT_DIR%" (
+    echo [ERROR] Sysinternals folder does not exist!
+    echo         Expected: %SYSINT_DIR%
+    echo.
+    echo SETUP INSTRUCTIONS:
+    echo 1. Download Sysinternals Suite from:
+    echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
+    echo.
+    echo 2. Extract the ZIP file
+    echo.
+    echo 3. Copy all .exe files to: %SYSINT_DIR%\
+    echo.
+    echo 4. Run this verification again
+    echo.
+    pause
+    goto MENU
+)
+
+echo Checking for key Sysinternals tools...
+echo.
+
+:: List of critical tools
+set "FOUND=0"
+set "MISSING=0"
+
+for %%t in (psinfo.exe coreinfo.exe pslist.exe handle.exe du.exe streams.exe autorunsc.exe clockres.exe) do (
+    if exist "%SYSINT_DIR%\%%t" (
+        echo [FOUND] %%t
+        set /a FOUND+=1
+    ) else (
+        echo [MISSING] %%t
+        set /a MISSING+=1
     )
-    $foundTools   = 0
-    $missingTools = @()
-    foreach ($tool in $keyTools) {
-        if (Test-Path (Join-Path $SysinternalsPath $tool)) { 
-            $foundTools++ 
-        } else { 
-            $missingTools += $tool 
-        }
-    }
+)
 
-    if ($foundTools -eq 0) {
-        Write-Host "ERROR: No Sysinternals tools found in $SysinternalsPath" -ForegroundColor Red
-        Write-Host "Download Sysinternals Suite and extract to that folder." -ForegroundColor Yellow
-        return $false
-    }
+echo.
+echo --------------------------------------------------------
+echo Summary: %FOUND% found, %MISSING% missing
+echo --------------------------------------------------------
+echo.
 
-    Write-Host "Found $foundTools/$($keyTools.Count) key tools in $SysinternalsPath" -ForegroundColor Green
-    if ($missingTools.Count -gt 0) {
-        Write-Host "Missing tools (optional tests may be skipped): $($missingTools -join ', ')" -ForegroundColor Yellow
-    }
-    return $true
-}
-
-# Clean and filter tool output
-function Clean-ToolOutput {
-    param(
-        [string]$ToolName,
-        [string]$RawOutput
+if %MISSING% GTR 0 (
+    echo [WARNING] Some tools are missing.
+    echo           The script will skip tests for missing tools.
+    echo.
+    echo Would you like to download the complete Sysinternals Suite now?
+    echo.
+    set /p "download_now=Download automatically? (Y/N): "
+    if /i "!download_now!"=="Y" (
+        goto DOWNLOAD_TOOLS
     )
-    if (!$RawOutput) { return "" }
+    echo.
+    echo To install missing tools manually:
+    echo 1. Download Sysinternals Suite
+    echo 2. Extract all .exe files to: %SYSINT_DIR%\
+    echo.
+    echo Or use Menu Option 6 to download automatically later.
+    echo.
+) else (
+    echo [SUCCESS] All key tools are present!
+    echo           You're ready to run tests.
+    echo.
+)
 
-    $lines = $RawOutput -split "`n" | ForEach-Object { $_.Trim() }
-    $cleanedLines = @()
-    $skipMode = $false
+pause
+goto MENU
 
-    foreach ($line in $lines) {
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+:DOWNLOAD_TOOLS
+echo.
+echo ========================================================
+echo      DOWNLOAD/UPDATE SYSINTERNALS SUITE AUTOMATICALLY
+echo ========================================================
+echo.
 
-        # Skip common boilerplate
-        if ($line -match "Copyright|Sysinternals|www\.microsoft\.com|Mark Russinovich|David Solomon|Bryce Cogswell") { continue }
-        if ($line -match "EULA|End User License Agreement|accepts the license agreement") { continue }
-        if ($line -match "^-+$|^=+$|^\*+$") { continue }
+set "SYSINT_DIR=%SCRIPT_DIR%\Sysinternals"
+set "DOWNLOAD_URL=https://download.sysinternals.com/files/SysinternalsSuite.zip"
+set "ZIP_FILE=%SCRIPT_DIR%\SysinternalsSuite.zip"
 
-        # Skip usage/help blocks
-        if ($line -match "^Usage:|^usage:|^Options:|^  -|^    -|^\s*-\w+\s+") {
-            $skipMode = $true
-            continue
-        }
-        if ($skipMode -and $line -match "^\s*$|^  |^    ") { continue }
-        if ($skipMode -and $line -notmatch "^\w|^\d") { continue }
-        $skipMode = $false
+echo This will download the latest Sysinternals Suite from:
+echo %DOWNLOAD_URL%
+echo.
+echo Download size: Approximately 30-40 MB
+echo.
 
-        switch ($ToolName) {
-            "psinfo" {
-                if ($line -match "^(System information|Uptime|Kernel version|Product type|Product version|Service pack|Kernel build number|Registered organization|Registered owner|IE version|System root|Processors|Processor speed|Total physical memory|Available physical memory|Computer name|Domain name|Logon server|Hot fix|Install date)") {
-                    $cleanedLines += $line
-                } elseif ($line -match "\d+\.\d+\s*GB|\d+\s*MB|\d+\s*MHz|\d+\s*KB") {
-                    $cleanedLines += $line
-                }
-            }
-            "coreinfo" {
-                if ($line -match "^(Intel64|Logical Processors|Logical Cores|Cores per Processor|APIC ID|Processor|CPU|Cache|Feature)") {
-                    $cleanedLines += $line
-                } elseif ($line -match "^\s*\*|^\s*-|\s+\w+\s*\*|\s+\w+\s*-") {
-                    $cleanedLines += $line
-                }
-            }
-            "pslist" {
-                if ($line -match "^(Name|Process|Pid)\s+|^\w+\s+\d+\s+") { $cleanedLines += $line }
-            }
-            "handle" {
-                if ($line -match "^(Handle summary|Total handles|Unique handles)") { $cleanedLines += $line }
-                elseif ($line -match "^explorer\.exe pid:|^  \w+:" -and $cleanedLines.Count -lt 20) { $cleanedLines += $line }
-            }
-            "du" {
-                if ($line -match "^\s*\d+.*\\.*$|^Files:|^Subdirectories:|^Total Size:") { $cleanedLines += $line }
-            }
-            "streams" {
-                if ($line -match ":\w+:" -or $line -match "^Summary:|files scanned") { $cleanedLines += $line }
-            }
-            "autorunsc" {
-                if ($line -match "^(HKLM|HKCU|Startup|Logon|Services|Winlogon)" -and $line.Length -lt 150) { $cleanedLines += $line }
-                elseif ($line -match "^Entry count|^Found \d+") { $cleanedLines += $line }
-            }
-            "sigcheck" {
-                if ($line -match "^[a-zA-Z]:\\.*\.(exe|dll|sys)" -or $line -match "Verified:|Signing date:|Publisher:") { $cleanedLines += $line }
-            }
-            "testlimit" {
-                if ($line -match "^(Test|Limit|Process|Memory|Handles|Threads).*:|allocation|created|failed") { $cleanedLines += $line }
-            }
-            "clockres" {
-                if ($line -match "resolution|timer|Maximum|Minimum|Current") { $cleanedLines += $line }
-            }
-            "contig" {
-                if ($line -match "^(Summary|Files|Fragmented|Percent)") { $cleanedLines += $line }
-            }
-            default {
-                if ($line -match "^\w+:|^\d+|\s+\d+\s+" -and $line.Length -lt 200) { $cleanedLines += $line }
-            }
-        }
-    }
-
-    $result = $cleanedLines | Where-Object { $_ -ne "" } | Select-Object -First 50
-    if ($result.Count -eq 0) { return "Tool completed - no detailed output captured" }
-    return ($result -join "`n")
-}
-
-# Run a tool
-function Run-Tool {
-    param(
-        [string]$ToolName,
-        [string]$Args = "",
-        [string]$Description = ""
+:: Check if folder exists and has files
+if exist "%SYSINT_DIR%\*.exe" (
+    echo [WARNING] Sysinternals tools already exist in:
+    echo           %SYSINT_DIR%
+    echo.
+    echo This will UPDATE/OVERWRITE existing tools.
+    echo.
+    set /p "confirm=Continue? (Y/N): "
+    if /i not "!confirm!"=="Y" (
+        echo Download cancelled.
+        timeout /t 2 >nul
+        goto MENU
     )
-    $toolPath = Join-Path $SysinternalsPath "$ToolName.exe"
-    if (!(Test-Path $toolPath)) {
-        Write-Host "SKIP: $ToolName not found" -ForegroundColor Yellow
-        return
-    }
-
-    Write-Host "Running $ToolName..." -ForegroundColor Cyan
-    try {
-        $startTime = Get-Date
-        if ($ToolName -in @("psinfo","pslist","handle","autorunsc","sigcheck","testlimit","contig")) {
-            $Args = "-accepteula $Args"
-        }
-        
-        # Split arguments properly, handling empty strings
-        $argArray = if ($Args.Trim()) { $Args.Split(' ') | Where-Object { $_ } } else { @() }
-        $rawResult = & $toolPath $argArray 2>&1
-        $duration  = ((Get-Date) - $startTime).TotalMilliseconds
-        $cleanOutput = Clean-ToolOutput -ToolName $ToolName -RawOutput ($rawResult | Out-String)
-
-        $script:TestResults += @{
-            Tool=$ToolName; Description=$Description; Status="SUCCESS"
-            Output=$cleanOutput; Duration=$duration
-        }
-
-        $previewLines = ($cleanOutput -split "`n") | Select-Object -First 3
-        if ($previewLines.Count -gt 0) {
-            Write-Host "Preview: $($previewLines[0])" -ForegroundColor DarkGray
-        }
-        Write-Host "OK: $ToolName completed in $([math]::Round($duration))ms (output cleaned)" -ForegroundColor Green
-    }
-    catch {
-        $script:TestResults += @{
-            Tool=$ToolName; Description=$Description; Status="FAILED"
-            Output=$_.Exception.Message; Duration=0
-        }
-        Write-Host "ERROR: $ToolName failed - $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-# ----------------------------
-# Original test suites
-# ----------------------------
-function Test-SystemInfo {
-    Write-Host "`n System Information " -ForegroundColor Green
-    Run-Tool -ToolName "psinfo"   -Args "-h -s -d" -Description "Complete system information"
-    Run-Tool -ToolName "clockres" -Description "System clock resolution"
-
-    try {
-        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
-        $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
-        $systemInfo = @"
-OS: $($os.Caption) $($os.Version)
-Architecture: $($os.OSArchitecture)
-Computer: $($cs.Name)
-Domain: $($cs.Domain)
-Manufacturer: $($cs.Manufacturer)
-Model: $($cs.Model)
-Total RAM: $([math]::Round($cs.TotalPhysicalMemory / 1GB, 2)) GB
-"@
-        $script:TestResults += @{
-            Tool="System-Overview"; Description="System overview information"
-            Status="SUCCESS"; Output=$systemInfo; Duration=100
-        }
-        Write-Host "System overview collected" -ForegroundColor Green
-    } catch { 
-        Write-Host "Could not get system overview: $($_.Exception.Message)" -ForegroundColor Red 
-    }
-}
-
-function Test-CPU {
-    Write-Host "`n CPU Testing " -ForegroundColor Green
-    Run-Tool -ToolName "coreinfo" -Args "-v -f -c -g" -Description "Complete CPU architecture info"
-
-    try {
-        $cpu = Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1
-        $cpuInfo = @"
-CPU Name: $($cpu.Name)
-Manufacturer: $($cpu.Manufacturer)
-Architecture: $($cpu.Architecture)
-Cores: $($cpu.NumberOfCores)
-Logical Processors: $($cpu.NumberOfLogicalProcessors)
-Max Clock Speed: $($cpu.MaxClockSpeed) MHz
-Current Clock Speed: $($cpu.CurrentClockSpeed) MHz
-Cache Size L2: $($cpu.L2CacheSize) KB
-Cache Size L3: $($cpu.L3CacheSize) KB
-"@
-        $script:TestResults += @{
-            Tool="CPU-Details"; Description="Detailed CPU information"
-            Status="SUCCESS"; Output=$cpuInfo; Duration=150
-        }
-        Write-Host "CPU details collected" -ForegroundColor Green
-    } catch { 
-        Write-Host "Could not get CPU details: $($_.Exception.Message)" -ForegroundColor Red 
-    }
-
-    Write-Host "Running CPU stress test (10 seconds)..." -ForegroundColor Yellow
-    try {
-        $startTime = Get-Date
-        $endTime = $startTime.AddSeconds(10)
-        $counter = 0
-        while ((Get-Date) -lt $endTime) {
-            $counter++
-            [math]::Sqrt($counter) | Out-Null
-        }
-        $duration = ((Get-Date) - $startTime).TotalSeconds
-        $opsPerSec = [math]::Round($counter / $duration)
-        $script:TestResults += @{
-            Tool="CPU-Performance"; Description="CPU performance test (10 seconds)"
-            Status="SUCCESS"; Output="Operations completed: $counter`nDuration: $([math]::Round($duration,2)) seconds`nOperations per second: $opsPerSec"
-            Duration=$duration * 1000
-        }
-        Write-Host "CPU performance test completed: $opsPerSec ops/sec" -ForegroundColor Green
-    } catch { 
-        Write-Host "CPU performance test failed: $($_.Exception.Message)" -ForegroundColor Red 
-    }
-
-    try {
-        $topCPU = Get-Process | Sort-Object CPU -Descending | Select-Object -First 5 ProcessName, CPU, WorkingSet
-        $cpuUsage = ""
-        foreach ($proc in $topCPU) {
-            $cpu = if ($proc.CPU) { [math]::Round($proc.CPU, 2) } else { 0 }
-            $memMB = if ($proc.WorkingSet) { [math]::Round($proc.WorkingSet / 1MB, 1) } else { 0 }
-            $cpuUsage += "$($proc.ProcessName): CPU=$cpu s, RAM=$memMB MB`n"
-        }
-        $script:TestResults += @{
-            Tool="CPU-Usage"; Description="Top 5 CPU consuming processes"
-            Status="SUCCESS"; Output=$cpuUsage; Duration=200
-        }
-        Write-Host "CPU usage analysis completed" -ForegroundColor Green
-    } catch { 
-        Write-Host "Could not analyze CPU usage: $($_.Exception.Message)" -ForegroundColor Red 
-    }
-}
-
-function Test-Memory {
-    Write-Host "`n RAM Testing " -ForegroundColor Green
-    try {
-        $mem = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
-        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
-        $totalGB = [math]::Round($mem.TotalPhysicalMemory / 1GB, 2)
-        $availableGB = [math]::Round($os.FreePhysicalMemory / 1KB / 1GB, 2)
-        $usedGB = $totalGB - $availableGB
-        $usagePercent = [math]::Round(($usedGB / $totalGB) * 100, 1)
-
-        $memModules = Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop
-        $moduleInfo = ""
-        $moduleCount = 0
-        foreach ($module in $memModules) {
-            $moduleCount++
-            $sizeGB = [math]::Round($module.Capacity / 1GB, 0)
-            $speed = if ($module.Speed) { $module.Speed } else { "Unknown" }
-            $moduleInfo += "Module $moduleCount : $sizeGB GB @ $speed MHz ($($module.MemoryType))`n"
-        }
-
-        $memoryInfo = @"
-Total Physical RAM: $totalGB GB
-Available RAM: $availableGB GB
-Used RAM: $usedGB GB
-Usage: $usagePercent%
-Memory Modules: $moduleCount
-$moduleInfo
-Virtual Memory Total: $([math]::Round($os.TotalVirtualMemorySize / 1KB / 1GB, 2)) GB
-Virtual Memory Available: $([math]::Round($os.FreeVirtualMemory / 1KB / 1GB, 2)) GB
-"@
-        $script:TestResults += @{
-            Tool="RAM-Details"; Description="Comprehensive RAM information"
-            Status="SUCCESS"; Output=$memoryInfo; Duration=200
-        }
-        Write-Host "RAM details collected: $totalGB GB total, $usagePercent% used" -ForegroundColor Green
-    } catch { 
-        Write-Host "Could not get detailed memory info: $($_.Exception.Message)" -ForegroundColor Red 
-    }
-
-    Write-Host "Running memory allocation test..." -ForegroundColor Yellow
-    Run-Tool -ToolName "testlimit" -Args "-m 100" -Description "Memory allocation test (100MB)"
-
-    try {
-        $pagesSec = Get-Counter "\Memory\Pages/sec" -SampleInterval 1 -MaxSamples 3 -ErrorAction Stop
-        $avgPages = ($pagesSec.CounterSamples | Measure-Object CookedValue -Average).Average
-        $script:TestResults += @{
-            Tool="Memory-Performance"; Description="Memory performance counters"
-            Status="SUCCESS"; Output="Average Pages/sec: $([math]::Round($avgPages, 2))"; Duration=3000
-        }
-        Write-Host "Memory performance measured" -ForegroundColor Green
-    } catch { 
-        Write-Host "Could not measure memory performance" -ForegroundColor Yellow 
-    }
-}
-
-function Test-Storage {
-    Write-Host "`n Hard Drive/SSD Testing " -ForegroundColor Green
-    try {
-        $disks = Get-CimInstance Win32_LogicalDisk -ErrorAction Stop | Where-Object { $_.DriveType -eq 3 }
-        $physicalDisks = Get-CimInstance Win32_DiskDrive -ErrorAction Stop
-
-        $diskInfo = "LOGICAL DRIVES:`n"
-        foreach ($disk in $disks) {
-            $totalGB = [math]::Round($disk.Size / 1GB, 2)
-            $freeGB  = [math]::Round($disk.FreeSpace / 1GB, 2)
-            $freePercent = if ($totalGB -gt 0) { [math]::Round(($freeGB / $totalGB) * 100, 1) } else { 0 }
-            $diskInfo += "$($disk.DeviceID) [$($disk.VolumeName)] - $totalGB GB total, $freeGB GB free ($freePercent% free)`n"
-        }
-
-        $diskInfo += "`nPHYSICAL DRIVES:`n"
-        foreach ($drive in $physicalDisks) {
-            $sizeGB = [math]::Round($drive.Size / 1GB, 0)
-            $driveType = if ($drive.MediaType -like "*SSD*" -or $drive.Model -like "*SSD*") { "SSD" } else { "HDD" }
-            $diskInfo += "$($drive.Model) - $sizeGB GB ($driveType)`n"
-        }
-
-        $script:TestResults += @{
-            Tool="Storage-Overview"; Description="Complete storage information"
-            Status="SUCCESS"; Output=$diskInfo; Duration=300
-        }
-        Write-Host "Storage overview collected" -ForegroundColor Green
-    } catch { 
-        Write-Host "Could not get storage overview: $($_.Exception.Message)" -ForegroundColor Red 
-    }
-
-    Run-Tool -ToolName "du"      -Args "-l 2 C:\"            -Description "Detailed disk usage analysis of C:"
-    Run-Tool -ToolName "streams" -Args "-s C:\Windows\System32" -Description "Check System32 for alternate data streams"
-    Run-Tool -ToolName "contig"  -Args "-a C:\"              -Description "Check C: drive fragmentation"
-
-    Write-Host "Running disk performance test..." -ForegroundColor Yellow
-    try {
-        $testFile = Join-Path $env:TEMP "disktest.tmp"
-        $testData = "0" * 1024 * 1024  # 1MB
-
-        $writeStart = Get-Date
-        for ($i = 0; $i -lt 10; $i++) { 
-            $testData | Out-File -FilePath $testFile -Append -Encoding ASCII -ErrorAction Stop
-        }
-        $writeTime = ((Get-Date) - $writeStart).TotalMilliseconds
-
-        $readStart = Get-Date
-        $content = Get-Content $testFile -Raw -ErrorAction Stop
-        $readTime = ((Get-Date) - $readStart).TotalMilliseconds
-        Remove-Item $testFile -ErrorAction SilentlyContinue
-
-        $writeMBps = if ($writeTime -gt 0) { [math]::Round(10 / ($writeTime / 1000), 2) } else { 0 }
-        $readMBps  = if ($readTime -gt 0)  { [math]::Round(10 / ($readTime / 1000), 2) } else { 0 }
-
-        $script:TestResults += @{
-            Tool="Disk-Performance"; Description="Basic disk performance test (10MB)"
-            Status="SUCCESS"; Output="Write Speed: $writeMBps MB/s`nRead Speed: $readMBps MB/s`nWrite Time: $([math]::Round($writeTime)) ms`nRead Time: $([math]::Round($readTime)) ms"
-            Duration=$writeTime + $readTime
-        }
-        Write-Host "Disk performance: Write $writeMBps MB/s, Read $readMBps MB/s" -ForegroundColor Green
-    } catch { 
-        Write-Host "Disk performance test failed: $($_.Exception.Message)" -ForegroundColor Red 
-    }
-}
-
-function Test-Processes {
-    Write-Host "`n Process Analysis " -ForegroundColor Green
-    Run-Tool -ToolName "pslist" -Args "-t"          -Description "Process tree"
-    Run-Tool -ToolName "handle" -Args "-p explorer" -Description "Explorer handles"
-}
-
-function Test-Security {
-    Write-Host "`n Security Analysis " -ForegroundColor Green
-    Run-Tool -ToolName "autorunsc" -Args "-a -c" -Description "Autorun entries"
-}
-
-function Test-Network {
-    Write-Host "`n Network Analysis " -ForegroundColor Green
-    try {
-        $connectionsRaw = netstat -an 2>&1
-        $connections = ($connectionsRaw | Measure-Object).Count
-        Write-Host "Network connections: $connections" -ForegroundColor White
-        $script:TestResults += @{
-            Tool="Netstat"; Description="Network connections"
-            Status="SUCCESS"; Output="Total connections: $connections"; Duration=50
-        }
-    } catch { 
-        Write-Host "Could not get network info: $($_.Exception.Message)" -ForegroundColor Red 
-    }
-}
-
-# ----------------------------
-# Additional Diagnostics
-# ----------------------------
-
-function Test-OSHealth {
-    Write-Host "`n OS Health (SFC/DISM) " -ForegroundColor Green
-    try {
-        $start = Get-Date
-        $dism = (dism /Online /Cleanup-Image /ScanHealth) 2>&1 | Out-String
-        $sfc  = (sfc /scannow) 2>&1 | Out-String
-        $dur  = ((Get-Date) - $start).TotalMilliseconds
-
-        $out = "DISM ScanHealth summary:`n" +
-               (($dism -split "`n") | Where-Object {$_ -match "No component store corruption|The component store is repairable|The restore operation|error"} | Select-Object -First 5) -join "`n"
-        $out += "`n`nSFC summary:`n" +
-               (($sfc -split "`n") | Where-Object {$_ -match "did not find|found corrupt|Windows Resource Protection"} | Select-Object -First 5) -join "`n"
-
-        $script:TestResults += @{
-            Tool="OS-Health"; Description="DISM + SFC integrity checks"
-            Status="SUCCESS"; Output=$out; Duration=$dur
-        }
-        Write-Host "OS health scan complete" -ForegroundColor Green
-    } catch {
-        $script:TestResults += @{
-            Tool="OS-Health"; Description="DISM+SFC"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0
-        }
-        Write-Host "OS health scan failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-function Test-StorageSMART {
-    Write-Host "`n Storage SMART / Reliability " -ForegroundColor Green
-    try {
-        $lines = @()
-
-        # Modern storage stack (best effort)
-        try {
-            $pd = Get-PhysicalDisk -ErrorAction Stop
-            foreach ($p in $pd) {
-                $wear = $null
-                try { $wear = ($p | Select-Object -ExpandProperty Wear -ErrorAction Stop) } catch {}
-                $lines += "{0} | Media={1} | Health={2} | LifeRemaining={3} | Usage={4}" -f `
-                    $p.FriendlyName, $p.MediaType, $p.HealthStatus, $wear, $p.Usage
-            }
-        } catch {}
-
-        try {
-            $rc = Get-StorageReliabilityCounter -ErrorAction Stop
-            foreach ($r in $rc) {
-                $lines += "RC: {0} | ReadErrors={1} | WriteErrors={2} | Temperature={3}C | Hours={4}" -f `
-                    $r.FriendlyName, $r.ReadErrorsTotal, $r.WriteErrorsTotal, $r.Temperature, $r.PowerOnHours
-            }
-        } catch {}
-
-        # Legacy WMI SMART
-        try {
-            $fail  = Get-CimInstance MSStorageDriver_FailurePredictStatus -Namespace root\wmi -ErrorAction Stop
-            $disks = Get-CimInstance Win32_DiskDrive -ErrorAction Stop
-            foreach ($f in $fail) {
-                $model = ($disks | Where-Object { $_.PNPDeviceID -like "*"+$f.InstanceName.Split("_")[0]+"*" } | Select-Object -First 1).Model
-                $resolvedModel = if ($model) { $model } else { $f.InstanceName }
-                $lines += "SMART: $resolvedModel | PredictFailure=$($f.PredictFailure)"
-            }
-        } catch {}
-
-        if (-not $lines) { $lines = @("SMART/reliability data not exposed by driver") }
-
-        $script:TestResults += @{
-            Tool="Storage-SMART"; Description="SMART & reliability (best effort)"
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=200
-        }
-        Write-Host "Storage SMART/reliability collected" -ForegroundColor Green
-    } catch {
-        $script:TestResults += @{
-            Tool="Storage-SMART"; Description="SMART"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0
-        }
-        Write-Host "Storage SMART failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-function Test-Trim {
-    Write-Host "`n SSD TRIM Status " -ForegroundColor Green
-    try {
-        $q = (fsutil behavior query DisableDeleteNotify) 2>&1
-        $map = @{}
-        ($q -split "`n") | ForEach-Object {
-            if ($_ -match "NTFS DisableDeleteNotify\s*=\s*(\d)") { $map["NTFS"] = $matches[1] }
-            if ($_ -match "ReFS DisableDeleteNotify\s*=\s*(\d)") { $map["ReFS"] = $matches[1] }
-        }
-        $txt = $map.GetEnumerator() | ForEach-Object { 
-            $status = if ($_.Value -eq "0") { "Enabled" } else { "Disabled" }
-            "{0}: {1}" -f $_.Key, $status
-        }
-        if (-not $txt) { $txt = @("TRIM status not reported") }
-        $script:TestResults += @{ 
-            Tool="SSD-TRIM"; Description="TRIM enablement"; 
-            Status="SUCCESS"; Output=($txt -join "`n"); Duration=50 
-        }
-        Write-Host "TRIM status collected" -ForegroundColor Green
-    } catch {
-        $script:TestResults += @{ 
-            Tool="SSD-TRIM"; Description="TRIM"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
-        }
-        Write-Host "TRIM check failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-function Test-NIC {
-    Write-Host "`n Network Adapter Snapshot " -ForegroundColor Green
-    try {
-        $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object {$_.Status -eq "Up"}
-        $lines = foreach ($a in $adapters) {
-            try {
-                $ipConfig = Get-NetIPConfiguration -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue
-                $ip = if ($ipConfig.IPv4Address) { $ipConfig.IPv4Address.IPAddress } else { "No IP" }
-            } catch {
-                $ip = "Unknown"
-            }
-            "{0}: {1} | Link={2} | Speed={3} | MAC={4}" -f $a.InterfaceAlias,$ip,$a.MediaConnectionState,$a.LinkSpeed,$a.MacAddress
-        }
-        if (-not $lines) { $lines = @("No active adapters") }
-        $script:TestResults += @{ 
-            Tool="NIC-Info"; Description="Adapters & link status"; 
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=150 
-        }
-        Write-Host "NIC snapshot collected" -ForegroundColor Green
-    } catch {
-        $script:TestResults += @{ 
-            Tool="NIC-Info"; Description="Adapters"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
-        }
-        Write-Host "NIC check failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-function Test-GPU {
-    Write-Host "`n GPU / DirectX (dxdiag) " -ForegroundColor Green
-    try {
-        $dx = Join-Path $env:TEMP "dxdiag_$([guid]::NewGuid().ToString('N')).txt"
-        & dxdiag /t $dx | Out-Null
-        
-        # Wait for dxdiag to complete (it runs async)
-        $timeout = 30
-        $elapsed = 0
-        while (!(Test-Path $dx) -and $elapsed -lt $timeout) {
-            Start-Sleep -Seconds 1
-            $elapsed++
-        }
-        
-        if (Test-Path $dx) {
-            $raw = Get-Content $dx -Raw -ErrorAction Stop
-            Remove-Item $dx -ErrorAction SilentlyContinue
-
-            $keep = ($raw -split "`r?`n") | Where-Object {
-                $_ -match "Card name|Manufacturer|Chip type|DAC type|Dedicated Memory|Driver Version|Driver Date|DirectX Version"
-            } | Select-Object -First 20
-
-            $script:TestResults += @{
-                Tool="GPU-DirectX"; Description="dxdiag summary"
-                Status="SUCCESS"; Output=($keep -join "`n"); Duration=($elapsed * 1000)
-            }
-            Write-Host "dxdiag summary collected" -ForegroundColor Green
-        } else {
-            throw "dxdiag output file not created within timeout"
-        }
-    } catch {
-        $script:TestResults += @{ 
-            Tool="GPU-DirectX"; Description="dxdiag"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
-        }
-        Write-Host "dxdiag failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-function Test-Power {
-    Write-Host "`n Power/Battery " -ForegroundColor Green
-    try {
-        $lines = @()
-        try {
-            $bat = Get-CimInstance Win32_Battery -ErrorAction Stop
-            foreach ($b in $bat) {
-                $lines += "Battery: Status=$($b.BatteryStatus) | Design=$($b.DesignCapacity) | FullCharge=$($b.FullChargeCapacity)"
-            }
-            if (-not $bat) { $lines += "No battery reported (desktop?)" }
-        } catch { $lines += "No battery reported (desktop?)" }
-
-        $report = Join-Path $ScriptRoot "energy-report.html"
-        Write-Host "Generating energy report (15 seconds)..." -ForegroundColor Yellow
-        powercfg /energy /output $report /duration 15 2>&1 | Out-Null
-        $lines += "Energy report: $report"
-
-        $script:TestResults += @{ 
-            Tool="Power-Energy"; Description="Battery & energy report"; 
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=16000 
-        }
-        Write-Host "Power/energy report generated" -ForegroundColor Green
-    } catch {
-        $script:TestResults += @{ 
-            Tool="Power-Energy"; Description="powercfg"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
-        }
-        Write-Host "Power report failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-function Test-HardwareEvents {
-    Write-Host "`n Hardware Error Events (WHEA) " -ForegroundColor Green
-    try {
-        $ev = Get-WinEvent -FilterHashtable @{
-            LogName='System'
-            ProviderName='Microsoft-Windows-WHEA-Logger'
-            StartTime=(Get-Date).AddDays(-7)
-        } -ErrorAction SilentlyContinue | Select-Object -First 20 TimeCreated, Id, LevelDisplayName, Message
-
-        if ($ev) {
-            $text = ($ev | ForEach-Object { 
-                $msgLines = ($_.Message -split "`r?`n" | Select-Object -First 2) -join " "
-                "[{0:yyyy-MM-dd HH:mm}] ID {1} {2}`n{3}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName,$msgLines
-            }) -join "`n`n"
-        } else {
-            $text = "No WHEA entries in last 7 days"
-        }
-
-        $script:TestResults += @{ 
-            Tool="WHEA"; Description="Hardware error events (7d)"; 
-            Status="SUCCESS"; Output=$text; Duration=300 
-        }
-        Write-Host "WHEA scan complete" -ForegroundColor Green
-    } catch {
-        $script:TestResults += @{ 
-            Tool="WHEA"; Description="Hardware events"; 
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0 
-        }
-        Write-Host "WHEA check failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-function Test-WindowsUpdate {
-    Write-Host "`n Windows Update Status " -ForegroundColor Green
-    try {
-        $lines = @()
-        
-        # Check Windows Update service status
-        $wuService = Get-Service -Name wuauserv -ErrorAction Stop
-        $lines += "Windows Update Service: $($wuService.Status)"
-        
-        # Use COM object to check update status
-        $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
-        $updateSearcher = $updateSession.CreateUpdateSearcher()
-        
-        # Get last search time
-        try {
-            $lastSearch = $updateSearcher.GetTotalHistoryCount()
-            if ($lastSearch -gt 0) {
-                $history = $updateSearcher.QueryHistory(0, 1)
-                $lastUpdate = $history | Select-Object -First 1
-                if ($lastUpdate -and $lastUpdate.Date) {
-                    $lines += "Last Update Check: $($lastUpdate.Date)"
-                }
-            }
-        } catch {
-            $lines += "Last Update Check: Unable to determine"
-        }
-        
-        # Search for pending updates
-        Write-Host "Searching for pending updates (may take 30-60 seconds)..." -ForegroundColor Yellow
-        $searchStart = Get-Date
-        $searchResult = $updateSearcher.Search("IsInstalled=0 and Type='Software'")
-        $searchDuration = ((Get-Date) - $searchStart).TotalMilliseconds
-        
-        $pendingCount = $searchResult.Updates.Count
-        $lines += "Pending Updates: $pendingCount"
-        
-        if ($pendingCount -gt 0) {
-            $lines += "`nPending Updates List:"
-            $count = 0
-            foreach ($update in $searchResult.Updates) {
-                $count++
-                if ($count -le 10) {  # Limit to first 10
-                    $size = if ($update.MaxDownloadSize -gt 0) { 
-                        "$([math]::Round($update.MaxDownloadSize / 1MB, 1)) MB" 
-                    } else { "Unknown" }
-                    $lines += "  $count. $($update.Title) ($size)"
-                }
-            }
-            if ($pendingCount -gt 10) {
-                $lines += "  ... and $($pendingCount - 10) more"
-            }
-        }
-        
-        # Get recent update history (last 10)
-        try {
-            $historyCount = $updateSearcher.GetTotalHistoryCount()
-            if ($historyCount -gt 0) {
-                $historyItems = $updateSearcher.QueryHistory(0, [Math]::Min(10, $historyCount))
-                $lines += "`nRecent Update History (Last 10):"
-                $count = 0
-                foreach ($item in $historyItems) {
-                    $count++
-                    $status = switch ($item.ResultCode) {
-                        1 { "In Progress" }
-                        2 { "Succeeded" }
-                        3 { "Succeeded with errors" }
-                        4 { "Failed" }
-                        5 { "Aborted" }
-                        default { "Unknown" }
-                    }
-                    $dateStr = if ($item.Date) { $item.Date.ToString('yyyy-MM-dd') } else { "Unknown" }
-                    $lines += "  $count. [$dateStr] $status - $($item.Title)"
-                }
-            }
-        } catch {
-            $lines += "Unable to retrieve update history"
-        }
-        
-        $script:TestResults += @{
-            Tool="Windows-Update"; Description="Windows Update status and pending updates"
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=$searchDuration
-        }
-        Write-Host "Windows Update check complete: $pendingCount pending updates" -ForegroundColor Green
-        
-    } catch {
-        $script:TestResults += @{
-            Tool="Windows-Update"; Description="Windows Update status"
-            Status="FAILED"; Output=$_.Exception.Message; Duration=0
-        }
-        Write-Host "Windows Update check failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-# Generate comprehensive report
-function Generate-Report {
-    Write-Host "`nGenerating Clean Report..." -ForegroundColor Cyan
-
-    $timestamp   = Get-Date -Format "yyyyMMdd_HHmmss"
-    $reportPath  = Join-Path $ScriptRoot "SystemTest_Clean_$timestamp.txt"
-    $detailedPath= Join-Path $ScriptRoot "SystemTest_Detailed_$timestamp.txt"
-
-    $report = @()
-    $report += "---------------------------------"
-    $report += "  SYSTEM TEST REPORT (CLEANED)"
-    $report += "---------------------------------"
-    $report += "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-    $report += "Computer: $env:COMPUTERNAME"
-    $report += "User: $env:USERNAME"
-    $report += "Drive: $DriveLetter"
-    $report += "Tools Location: $SysinternalsPath"
-    $report += ""
-
-    $successCount = ($TestResults | Where-Object { $_.Status -eq "SUCCESS" }).Count
-    $failedCount  = ($TestResults | Where-Object { $_.Status -eq "FAILED"  }).Count
-    $totalCount   = $TestResults.Count
-    if ($totalCount -gt 0) {
-        $successRate = [math]::Round(($successCount / $totalCount) * 100, 1)
-    } else {
-        $successRate = 0
-    }
-    $totalTime = 0
-    foreach ($result in $TestResults) {
-        if ($result.Duration -and $result.Duration -gt 0) { $totalTime += $result.Duration }
-    }
-
-    $report += "EXECUTIVE SUMMARY:"
-    $report += "-----------------"
-    $report += "Total Tests Run: $totalCount"
-    $report += "Successful: $successCount"
-    $report += "Failed: $failedCount"
-    $report += "Success Rate: $successRate%"
-    $report += "Total Test Time: $([math]::Round($totalTime/1000,1)) seconds"
-    $report += ""
-
-    $report += "KEY FINDINGS:"
-    $report += "-------------"
-
-    $sysInfo = $TestResults | Where-Object { $_.Tool -eq "System-Overview" }
-    if ($sysInfo) {
-        $report += "SYSTEM:"
-        $report += $sysInfo.Output -split "`n" | Where-Object { $_ -match "OS:|Total RAM:|CPU|Architecture:" } | ForEach-Object { "  $_" }
-        $report += ""
-    }
-
-    $cpuPerf = $TestResults | Where-Object { $_.Tool -eq "CPU-Performance" }
-    if ($cpuPerf -and $cpuPerf.Output -match "Operations per second: (\d+)") {
-        $report += "CPU PERFORMANCE:"
-        $report += "  Operations/sec: $($matches[1])"
-    }
-
-    $ramInfo = $TestResults | Where-Object { $_.Tool -eq "RAM-Details" }
-    if ($ramInfo -and $ramInfo.Output -match "Total Physical RAM: ([\d\.]+) GB.*Usage: ([\d\.]+)%") {
-        $report += "MEMORY:"
-        $report += "  Total RAM: $($matches[1]) GB"
-        $report += "  Usage: $($matches[2])%"
-    }
-
-    $diskPerf = $TestResults | Where-Object { $_.Tool -eq "Disk-Performance" }
-    if ($diskPerf -and $diskPerf.Output -match "Write Speed: ([\d\.]+) MB/s.*Read Speed: ([\d\.]+) MB/s") {
-        $report += "DISK PERFORMANCE:"
-        $report += "  Write Speed: $($matches[1]) MB/s"
-        $report += "  Read Speed: $($matches[2]) MB/s"
-    }
-
-    $osHealth = $TestResults | Where-Object { $_.Tool -eq "OS-Health" }
-    if ($osHealth) {
-        if ($osHealth.Output -match "repairable|corrupt|could not perform") {
-            $report += "OS HEALTH: Issues detected (see detailed section)"
-        } else {
-            $report += "OS HEALTH: No component store corruption"
-        }
-    }
-
-    $smart = $TestResults | Where-Object { $_.Tool -eq "Storage-SMART" }
-    if ($smart -and ($smart.Output -match "PredictFailure\s*=\s*True|ReadErrors|WriteErrors|Temperature=\s*([7-9]\d)")) {
-        $report += "STORAGE: SMART/reliability warnings present"
-    }
-
-    $whea = $TestResults | Where-Object { $_.Tool -eq "WHEA" }
-    if ($whea -and ($whea.Output -notmatch "No WHEA entries")) {
-        $report += "HARDWARE EVENTS: WHEA errors logged in last 7 days"
-    }
-
-    $winUpdate = $TestResults | Where-Object { $_.Tool -eq "Windows-Update" }
-    if ($winUpdate -and ($winUpdate.Output -match "Pending Updates: (\d+)")) {
-        $pendingUpdates = $matches[1]
-        if ([int]$pendingUpdates -gt 0) {
-            $report += "WINDOWS UPDATE: $pendingUpdates pending updates available"
-        }
-    }
-
-    $report += ""
-    $report += "DETAILED RESULTS:"
-    $report += "-----------------"
-
-    foreach ($result in $TestResults) {
-        $report += ""
-        $report += "[$($result.Tool.ToUpper())] - $($result.Description)"
-        $report += "Status: $($result.Status) | Duration: $([math]::Round($result.Duration)) ms"
-        if ($result.Output -and $result.Output.Trim()) {
-            $cleanOutput = $result.Output -split "`n" |
-                           Where-Object { $_ -notmatch "^\s*$|^-+$|^=+$" } |
-                           Select-Object -First 15
-            if ($cleanOutput.Count -gt 0) {
-                $report += "Results:"
-                foreach ($line in $cleanOutput) { $report += "  $line" }
-            }
-        }
-        $report += "----------------------------------------"
-    }
-
-    $report += ""
-    $report += "RECOMMENDATIONS:"
-    $report += "----------------"
-
-    $recommendations = @()
-
-    if ($ramInfo -and $ramInfo.Output -match "Usage: ([\d\.]+)%") {
-        $memUsage = [float]$matches[1]
-        if ($memUsage -gt 80) { 
-            $recommendations += "HIGH MEMORY USAGE ($memUsage%) - Consider adding more RAM or closing unnecessary programs" 
-        } elseif ($memUsage -lt 30) { 
-            $recommendations += "LOW MEMORY USAGE ($memUsage%) - System has plenty of available RAM" 
-        }
-    }
-
-    if ($cpuPerf -and $cpuPerf.Output -match "Operations per second: (\d+)") {
-        $opsPerSec = [int]$matches[1]
-        if ($opsPerSec -lt 10000) { 
-            $recommendations += "CPU PERFORMANCE - Consider checking for background processes or CPU throttling" 
-        }
-    }
-
-    if ($diskPerf -and $diskPerf.Output -match "Write Speed: ([\d\.]+) MB/s") {
-        $writeSpeed = [float]$matches[1]
-        if ($writeSpeed -lt 50) { 
-            $recommendations += "SLOW DISK WRITE SPEED ($writeSpeed MB/s) - Consider disk defragmentation or SSD upgrade" 
-        }
-    }
-
-    if ($smart -and ($smart.Output -match "PredictFailure\s*=\s*True")) {
-        $recommendations += "SMART PREDICTIVE FAILURE - Backup and replace affected drive ASAP"
-    }
-
-    if ($trim -and ($trim.Output -match "Disabled")) {
-        $recommendations += "ENABLE SSD TRIM - Improves SSD performance and wear leveling"
-    }
-
-    if ($whea -and ($whea.Output -notmatch "No WHEA entries")) {
-        $recommendations += "WHEA ERRORS - Investigate CPU/RAM/PCIe stability, drivers, and thermals"
-    }
-
-    if ($winUpdate -and ($winUpdate.Output -match "Pending Updates: (\d+)")) {
-        $pendingUpdates = [int]$matches[1]
-        if ($pendingUpdates -gt 10) {
-            $recommendations += "WINDOWS UPDATES - $pendingUpdates updates pending, consider updating soon"
-        }
-    }
-
-    if ($recommendations.Count -eq 0) {
-        $recommendations += "SYSTEM HEALTH GOOD - No critical issues detected"
-    }
-    
-    foreach ($rec in $recommendations) {
-        $report += "• $rec"
-        if ($rec -match "FAILURE|FAILED|ERROR|CRITICAL|ASAP") {
-            Write-Host "• $rec" -ForegroundColor Red
-        } elseif ($rec -match "WARNING|WHEA|TRIM|HIGH MEMORY USAGE|SLOW DISK|pending") {
-            Write-Host "• $rec" -ForegroundColor Yellow
-        } else {
-            Write-Host "• $rec" -ForegroundColor Green
-        }
-    }
-
-    $report += ""
-    $report += "Report generated by Portable Sysinternals Tester"
-    $report += "For detailed output, see: $detailedPath"
-
-    try {
-        $report | Out-File -FilePath $reportPath -Encoding UTF8
-        Write-Host "`nClean report saved: $reportPath" -ForegroundColor Green
-
-        $detailedReport = @()
-        $detailedReport += "DETAILED SYSTEM TEST REPORT"
-        $detailedReport += "---------------------------"
-        $detailedReport += "Generated: $(Get-Date)"
-        $detailedReport += ""
-
-        foreach ($result in $TestResults) {
-            $detailedReport += "TOOL: $($result.Tool)"
-            $detailedReport += "DESCRIPTION: $($result.Description)"
-            $detailedReport += "STATUS: $($result.Status)"
-            $detailedReport += "DURATION: $($result.Duration) ms"
-            $detailedReport += "FULL OUTPUT:"
-            $detailedReport += $result.Output
-            $detailedReport += ""
-            $detailedReport += ("=" * 60)
-            $detailedReport += ""
-        }
-
-        $detailedReport | Out-File -FilePath $detailedPath -Encoding UTF8
-        Write-Host "Detailed report saved: $detailedPath" -ForegroundColor Green
-
-        $cleanSize    = (Get-Item $reportPath).Length
-        $detailedSize = (Get-Item $detailedPath).Length
-        $compressionRatio = if ($detailedSize -gt 0) { 
-            [math]::Round((1 - ($cleanSize / $detailedSize)) * 100, 1) 
-        } else { 0 }
-
-        Write-Host "`nREPORT STATISTICS:" -ForegroundColor Cyan
-        Write-Host "Clean report: $([math]::Round($cleanSize/1KB,1)) KB" -ForegroundColor White
-        Write-Host "Detailed report: $([math]::Round($detailedSize/1KB,1)) KB" -ForegroundColor White
-        Write-Host "Space saved: $compressionRatio% (removed EULA/verbose text)" -ForegroundColor Green
-
-        Write-Host "`nWhich report would you like to open?" -ForegroundColor Yellow
-        Write-Host "1. Clean Summary Report (Recommended)" -ForegroundColor White
-        Write-Host "2. Detailed Report (Full Output)" -ForegroundColor White
-        Write-Host "3. Both Reports" -ForegroundColor White
-        Write-Host "4. None" -ForegroundColor White
-
-        $choice = Read-Host "Choice (1-4)"
-        switch ($choice) {
-            "1" { 
-                try { Start-Process notepad.exe $reportPath } 
-                catch { Write-Host "File: $reportPath" -ForegroundColor Cyan } 
-            }
-            "2" { 
-                try { Start-Process notepad.exe $detailedPath } 
-                catch { Write-Host "File: $detailedPath" -ForegroundColor Cyan } 
-            }
-            "3" {
-                try {
-                    Start-Process notepad.exe $reportPath
-                    Start-Process notepad.exe $detailedPath
-                } catch {
-                    Write-Host "Files:" -ForegroundColor Cyan
-                    Write-Host "Clean: $reportPath" -ForegroundColor White
-                    Write-Host "Detailed: $detailedPath" -ForegroundColor White
-                }
-            }
-        }
-    } catch {
-        Write-Host "Error saving reports: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-# Menu with Windows Update added
-function Show-Menu {
-    Clear-Host
-    Write-Host "-------------------------------------" -ForegroundColor Cyan
-    Write-Host "    PORTABLE SYSINTERNALS TESTER" -ForegroundColor Cyan
-    Write-Host "-------------------------------------" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Drive: $DriveLetter | Computer: $env:COMPUTERNAME" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "1.  System Information Tests" -ForegroundColor White
-    Write-Host "2.  CPU Testing (Performance & Info)" -ForegroundColor White
-    Write-Host "3.  RAM Testing (Memory Analysis)" -ForegroundColor White
-    Write-Host "4.  Hard Drive/SSD Testing" -ForegroundColor White
-    Write-Host "5.  Process Analysis Tests" -ForegroundColor White
-    Write-Host "6.  Security Analysis Tests" -ForegroundColor White
-    Write-Host "7.  Network Analysis Tests" -ForegroundColor White
-    Write-Host "8.  OS Health (DISM/SFC)" -ForegroundColor White
-    Write-Host "9.  Storage SMART / Reliability" -ForegroundColor White
-    Write-Host "10. SSD TRIM Status" -ForegroundColor White
-    Write-Host "11. NIC Snapshot (Link/Speed/IP)" -ForegroundColor White
-    Write-Host "12. GPU / DirectX (dxdiag summary)" -ForegroundColor White
-    Write-Host "13. Power/Battery + Energy Report" -ForegroundColor White
-    Write-Host "14. Hardware Error Events (WHEA)" -ForegroundColor White
-    Write-Host "15. Windows Update Status" -ForegroundColor White
-    Write-Host "16. Run ALL Tests" -ForegroundColor Yellow
-    Write-Host "17. Generate Report" -ForegroundColor Green
-    Write-Host "18. Clear Results" -ForegroundColor Red
-    Write-Host "Q.  Quit" -ForegroundColor White
-    Write-Host ""
-    Write-Host "Tests completed: $($TestResults.Count)" -ForegroundColor Gray
-}
-
-function Start-Menu {
-    do {
-        Show-Menu
-        $choice = Read-Host "`nSelect option (1-18, Q)"
-        switch ($choice) {
-            "1"  { Test-SystemInfo;       Read-Host "`nPress Enter to continue" }
-            "2"  { Test-CPU;              Read-Host "`nPress Enter to continue" }
-            "3"  { Test-Memory;           Read-Host "`nPress Enter to continue" }
-            "4"  { Test-Storage;          Read-Host "`nPress Enter to continue" }
-            "5"  { Test-Processes;        Read-Host "`nPress Enter to continue" }
-            "6"  { Test-Security;         Read-Host "`nPress Enter to continue" }
-            "7"  { Test-Network;          Read-Host "`nPress Enter to continue" }
-            "8"  { Test-OSHealth;         Read-Host "`nPress Enter to continue" }
-            "9"  { Test-StorageSMART;     Read-Host "`nPress Enter to continue" }
-            "10" { Test-Trim;             Read-Host "`nPress Enter to continue" }
-            "11" { Test-NIC;              Read-Host "`nPress Enter to continue" }
-            "12" { Test-GPU;              Read-Host "`nPress Enter to continue" }
-            "13" { Test-Power;            Read-Host "`nPress Enter to continue" }
-            "14" { Test-HardwareEvents;   Read-Host "`nPress Enter to continue" }
-            "15" { Test-WindowsUpdate;    Read-Host "`nPress Enter to continue" }
-            "16" {
-                Write-Host "`nRunning ALL tests..." -ForegroundColor Yellow
-                Test-SystemInfo
-                Test-CPU
-                Test-Memory
-                Test-Storage
-                Test-Processes
-                Test-Security
-                Test-Network
-                Test-OSHealth
-                Test-StorageSMART
-                Test-Trim
-                Test-NIC
-                Test-GPU
-                Test-Power
-                Test-HardwareEvents
-                Test-WindowsUpdate
-                Write-Host "`nAll tests completed!" -ForegroundColor Green
-                Read-Host "Press Enter to continue"
-            }
-            "17" { Generate-Report;       Read-Host "`nPress Enter to continue" }
-            "18" {
-                $script:TestResults = @()
-                Write-Host "Results cleared." -ForegroundColor Green
-                Start-Sleep 1
-            }
-            "Q" { return }
-            "q" { return }
-            default {
-                Write-Host "Invalid choice. Try again." -ForegroundColor Red
-                Start-Sleep 1
-            }
-        }
-    } while ($choice -ne "Q" -and $choice -ne "q")
-}
-
-# Main execution
-try {
-    Write-Host "Starting Sysinternals Tester..." -ForegroundColor Green
-
-    if (!(Initialize-Environment)) {
-        Write-Host "`nSetup required before running tests." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
-        exit 1
-    }
-
-    if ($AutoRun) {
-        Write-Host "`nAuto-running all tests..." -ForegroundColor Yellow
-        Test-SystemInfo
-        Test-CPU
-        Test-Memory
-        Test-Storage
-        Test-Processes
-        Test-Security
-        Test-Network
-        Test-OSHealth
-        Test-StorageSMART
-        Test-Trim
-        Test-NIC
-        Test-GPU
-        Test-Power
-        Test-HardwareEvents
-        Test-WindowsUpdate
-        Generate-Report
-        Write-Host "`nAuto-run completed!" -ForegroundColor Green
-        Read-Host "Press Enter to exit"
-    }
-    else {
-        Start-Menu
-    }
-
-    Write-Host "`nSession completed successfully!" -ForegroundColor Green
-}
-catch {
-    Write-Host "`nERROR: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "Line: $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Yellow
-    Read-Host "Press Enter to exit"
-}
-finally {
-    Write-Host "Thank you for using Portable Sysinternals Tester!" -ForegroundColor Cyan
-    if ($TestResults.Count -gt 0) {
-        Write-Host "Total tests run: $($TestResults.Count)" -ForegroundColor Gray
-    }
-}
+) else (
+    echo Target folder: %SYSINT_DIR%
+    echo.
+    set /p "confirm=Proceed with download? (Y/N): "
+    if /i not "!confirm!"=="Y" (
+        echo Download cancelled.
+        timeout /t 2 >nul
+        goto MENU
+    )
+)
+
+echo.
+echo --------------------------------------------------------
+echo Starting download...
+echo --------------------------------------------------------
+echo.
+
+:: Create Sysinternals folder if it doesn't exist
+if not exist "%SYSINT_DIR%" (
+    echo Creating folder: %SYSINT_DIR%
+    mkdir "%SYSINT_DIR%" 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Failed to create Sysinternals folder.
+        echo         Check permissions on: %SCRIPT_DIR%
+        pause
+        goto MENU
+    )
+)
+
+:: Download using PowerShell
+echo Downloading Sysinternals Suite...
+echo This may take 1-3 minutes depending on your connection.
+echo.
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ProgressPreference='SilentlyContinue'; Write-Host 'Connecting to download server...' -ForegroundColor Cyan; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%ZIP_FILE%' -UseBasicParsing; if (Test-Path '%ZIP_FILE%') { Write-Host 'Download completed successfully!' -ForegroundColor Green; exit 0 } else { Write-Host 'Download failed!' -ForegroundColor Red; exit 1 } }"
+
+if not exist "%ZIP_FILE%" (
+    echo.
+    echo [ERROR] Download failed. Please check:
+    echo         - Internet connection
+    echo         - Firewall/antivirus settings
+    echo         - Proxy configuration
+    echo.
+    echo You can manually download from:
+    echo https://live.sysinternals.com
+    echo.
+    pause
+    goto MENU
+)
+
+:: Verify ZIP file was downloaded
+if not exist "%ZIP_FILE%" (
+    echo [ERROR] ZIP file not found after download.
+    echo         Expected: %ZIP_FILE%
+    pause
+    goto MENU
+)
+
+:: Check ZIP file size (should be at least 10MB)
+for %%A in ("%ZIP_FILE%") do set "FILE_SIZE=%%~zA"
+if %FILE_SIZE% LSS 10000000 (
+    echo [WARNING] Downloaded file seems too small (%FILE_SIZE% bytes^)
+    echo           Download may have failed or been corrupted.
+    del "%ZIP_FILE%" 2>nul
+    pause
+    goto MENU
+)
+
+echo.
+echo --------------------------------------------------------
+echo Extracting tools...
+echo --------------------------------------------------------
+echo.
+
+:: Extract ZIP using PowerShell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { Write-Host 'Extracting files to: %SYSINT_DIR%' -ForegroundColor Cyan; Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%SYSINT_DIR%' -Force; if (Test-Path '%SYSINT_DIR%\psinfo.exe') { Write-Host 'Extraction completed successfully!' -ForegroundColor Green } else { Write-Host 'Extraction may have failed!' -ForegroundColor Yellow } }"
+
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Extraction failed.
+    echo         You can manually extract the ZIP file:
+    echo         %ZIP_FILE%
+    echo         To folder: %SYSINT_DIR%
+    echo.
+    pause
+    goto MENU
+)
+
+:: Clean up ZIP file
+echo.
+echo Cleaning up...
+del "%ZIP_FILE%" 2>nul
+
+echo.
+echo --------------------------------------------------------
+echo Verifying installation...
+echo --------------------------------------------------------
+echo.
+
+:: Count installed tools
+set "TOOL_COUNT=0"
+for %%F in ("%SYSINT_DIR%\*.exe") do (
+    set /a TOOL_COUNT+=1
+)
+
+if %TOOL_COUNT% GTR 0 (
+    echo [SUCCESS] Installation complete!
+    echo           %TOOL_COUNT% Sysinternals tools installed.
+    echo.
+    echo Location: %SYSINT_DIR%
+    echo.
+    echo Key tools installed:
+    for %%t in (psinfo.exe coreinfo.exe pslist.exe handle.exe du.exe streams.exe autorunsc.exe clockres.exe) do (
+        if exist "%SYSINT_DIR%\%%t" (
+            echo   [OK] %%t
+        )
+    )
+    echo.
+    echo You can now run tests using Menu Option 1 or 2.
+) else (
+    echo [WARNING] No .exe files found in Sysinternals folder.
+    echo           Installation may have failed.
+    echo.
+    echo Please try:
+    echo   - Running this option again
+    echo   - Downloading manually from https://live.sysinternals.com
+)
+
+echo.
+pause
+goto MENU
+
+:HELP
+cls
+echo ========================================================
+echo                HELP / TROUBLESHOOTING GUIDE
+echo ========================================================
+echo.
+echo COMMON ISSUES AND SOLUTIONS:
+echo.
+echo --------------------------------------------------------
+echo 1. SCRIPT WINDOW CLOSES IMMEDIATELY OR "CRASHES"
+echo --------------------------------------------------------
+echo    Solution:
+echo    - Open Command Prompt first (cmd.exe)
+echo    - Drag this batch file into the window
+echo    - This launcher now pauses on errors automatically
+echo.
+echo --------------------------------------------------------
+echo 2. EXECUTION POLICY ERRORS
+echo --------------------------------------------------------
+echo    Error: "cannot be loaded because running scripts is disabled"
+echo.
+echo    Solution:
+echo    - Use Menu Option 4 to fix automatically
+echo    - Or manually run in PowerShell as Administrator:
+echo      Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+echo.
+echo --------------------------------------------------------
+echo 3. SYSINTERNALS TOOLS NOT FOUND
+echo --------------------------------------------------------
+echo    Error: "Sysinternals folder not found" or tools skipped
+echo.
+echo    Solution A (AUTOMATIC - RECOMMENDED):
+echo    - Use Menu Option 6 to download automatically
+echo    - Downloads latest version from Microsoft
+echo    - Extracts all tools automatically
+echo.
+echo    Solution B (MANUAL):
+echo    - Use Menu Option 5 to verify what's missing
+echo    - Download from: https://live.sysinternals.com
+echo    - Extract all .exe files to: %SCRIPT_DIR%\Sysinternals\
+echo.
+echo --------------------------------------------------------
+echo 4. PERMISSION / ACCESS DENIED ERRORS
+echo --------------------------------------------------------
+echo    Solution:
+echo    - This launcher auto-elevates (requires UAC prompt)
+echo    - Some tests require administrator rights:
+echo      * DISM and SFC scans
+echo      * Energy report generation
+echo      * Hardware SMART data
+echo      * Windows Update queries
+echo.
+echo --------------------------------------------------------
+echo 5. WINDOWS UPDATE CHECK FAILS
+echo --------------------------------------------------------
+echo    Error: Windows Update COM object errors
+echo.
+echo    Solution:
+echo    - Ensure Windows Update service is running:
+echo      services.msc -^> Windows Update -^> Start
+echo    - Check if Windows Update is corrupted:
+echo      Run "DISM /Online /Cleanup-Image /RestoreHealth"
+echo    - May require administrator rights
+echo.
+echo --------------------------------------------------------
+echo 6. TESTS TAKE TOO LONG
+echo --------------------------------------------------------
+echo    Some tests are intentionally slow:
+echo    - CPU Performance Test: 10 seconds
+echo    - Power/Energy Report: 15 seconds  
+echo    - Windows Update Search: 30-60 seconds
+echo    - DISM/SFC Scans: 5-15 minutes
+echo.
+echo --------------------------------------------------------
+echo 7. REPORTS NOT GENERATING
+echo --------------------------------------------------------
+echo    Solution:
+echo    - Check script directory write permissions
+echo    - Ensure tests have been run first
+echo    - Look for .txt files in: %SCRIPT_DIR%
+echo.
+echo --------------------------------------------------------
+echo              FEATURE DESCRIPTIONS
+echo --------------------------------------------------------
+echo.
+echo NEW IN THIS VERSION:
+echo   - Windows Update Status checking (pending updates, history)
+echo   - Enhanced error handling throughout
+echo   - Better compatibility with PowerShell 7
+echo   - Improved SMART data collection
+echo   - Network adapter detailed info
+echo.
+echo TEST CATEGORIES:
+echo   System Info    : OS, hardware overview, clock resolution
+echo   CPU Tests      : Architecture, performance, top processes
+echo   RAM Tests      : Capacity, modules, usage, performance
+echo   Storage Tests  : Drives, SMART, TRIM, fragmentation
+echo   Processes      : Process tree, handle analysis
+echo   Security       : Autorun entries, startup items
+echo   Network        : Connections, adapter status, speeds
+echo   OS Health      : DISM integrity, SFC verification
+echo   GPU/Graphics   : DirectX info, video card details
+echo   Power          : Battery status, energy efficiency
+echo   Hardware Events: WHEA error logging
+echo   Windows Update : Pending updates, history, service status
+echo.
+echo --------------------------------------------------------
+echo                  SUPPORT RESOURCES
+echo --------------------------------------------------------
+echo.
+echo Sysinternals Documentation:
+echo   https://docs.microsoft.com/sysinternals
+echo.
+echo PowerShell Execution Policy:
+echo   https://docs.microsoft.com/powershell/execution-policies
+echo.
+echo Windows Update Troubleshooting:
+echo   https://support.microsoft.com/windows-update
+echo.
+echo For script issues, check:
+echo   - Event Viewer (Windows Logs -^> Application)
+echo   - PowerShell transcript logs (if enabled)
+echo.
+pause
+goto MENU
+
+:EXIT
+echo.
+echo ========================================================
+echo Thank you for using Portable Sysinternals System Tester!
+echo ========================================================
+echo.
+echo Reports are saved in: %SCRIPT_DIR%
+echo Look for files: SystemTest_Clean_*.txt
+echo                 SystemTest_Detailed_*.txt
+echo                 energy-report.html (if power test run)
+echo.
+echo Visit https://sysinternals.com for tool updates
+echo.
+timeout /t 2 >nul
+exit /b 0
