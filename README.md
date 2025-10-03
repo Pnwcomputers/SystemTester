@@ -201,7 +201,7 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 
 ---
 
-## 📋 What's New in Version 2.0
+## 📋 What's New in Version 1.0
 
 ### ✅ Implemented Features
 * Windows Update status checking (pending updates, history, service status)
