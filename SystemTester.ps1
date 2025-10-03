@@ -650,7 +650,8 @@ function Test-HardwareEvents {
 
         if ($ev) {
             $text = ($ev | ForEach-Object { 
-                "[{0:yyyy-MM-dd HH:mm}] ID {1} {2}`n{3}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName,($_.Message -split "`r?`n" | Select-Object -First 2 -join " ") 
+                $msgLines = ($_.Message -split "`r?`n" | Select-Object -First 2) -join " "
+                "[{0:yyyy-MM-dd HH:mm}] ID {1} {2}`n{3}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName,$msgLines
             }) -join "`n`n"
         } else {
             $text = "No WHEA entries in last 7 days"
