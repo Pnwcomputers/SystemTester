@@ -22,7 +22,7 @@ if errorlevel 1 (
         echo.
         echo [ERROR] Elevation failed or was cancelled.
         echo         Right-click this file and choose "Run as administrator".
-        echo         Or check User Account Control (UAC) settings.
+        echo         Or check User Account Control settings.
         echo.
         pause
         exit /b 1
@@ -450,26 +450,14 @@ if not exist "%SYSINT_DIR%" (
     )
 )
 
-:: Download using PowerShell with progress
+:: Download using PowerShell
 echo Downloading Sysinternals Suite...
 echo This may take 1-3 minutes depending on your connection.
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ProgressPreference = 'SilentlyContinue'; " ^
-  "try { " ^
-  "  Write-Host 'Connecting to download server...' -ForegroundColor Cyan; " ^
-  "  $webClient = New-Object System.Net.WebClient; " ^
-  "  $webClient.DownloadFile('%DOWNLOAD_URL%', '%ZIP_FILE%'); " ^
-  "  Write-Host 'Download completed successfully!' -ForegroundColor Green; " ^
-  "  exit 0; " ^
-  "} catch { " ^
-  "  Write-Host 'ERROR: Download failed!' -ForegroundColor Red; " ^
-  "  Write-Host $_.Exception.Message -ForegroundColor Red; " ^
-  "  exit 1; " ^
-  "}"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ProgressPreference='SilentlyContinue'; Write-Host 'Connecting to download server...' -ForegroundColor Cyan; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%ZIP_FILE%' -UseBasicParsing; if (Test-Path '%ZIP_FILE%') { Write-Host 'Download completed successfully!' -ForegroundColor Green; exit 0 } else { Write-Host 'Download failed!' -ForegroundColor Red; exit 1 } }"
 
-if errorlevel 1 (
+if not exist "%ZIP_FILE%" (
     echo.
     echo [ERROR] Download failed. Please check:
     echo         - Internet connection
@@ -508,31 +496,7 @@ echo --------------------------------------------------------
 echo.
 
 :: Extract ZIP using PowerShell
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "try { " ^
-  "  Write-Host 'Extracting files to: %SYSINT_DIR%' -ForegroundColor Cyan; " ^
-  "  Add-Type -AssemblyName System.IO.Compression.FileSystem; " ^
-  "  [System.IO.Compression.ZipFile]::ExtractToDirectory('%ZIP_FILE%', '%SYSINT_DIR%'); " ^
-  "  Write-Host 'Extraction completed successfully!' -ForegroundColor Green; " ^
-  "  exit 0; " ^
-  "} catch { " ^
-  "  if ($_.Exception.Message -match 'already exists') { " ^
-  "    Write-Host 'Files exist, overwriting...' -ForegroundColor Yellow; " ^
-  "    $zip = [System.IO.Compression.ZipFile]::OpenRead('%ZIP_FILE%'); " ^
-  "    foreach ($entry in $zip.Entries) { " ^
-  "      $dest = Join-Path '%SYSINT_DIR%' $entry.FullName; " ^
-  "      if ($entry.FullName -like '*/') { continue; } " ^
-  "      [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true); " ^
-  "    } " ^
-  "    $zip.Dispose(); " ^
-  "    Write-Host 'Overwrite completed!' -ForegroundColor Green; " ^
-  "    exit 0; " ^
-  "  } else { " ^
-  "    Write-Host 'ERROR: Extraction failed!' -ForegroundColor Red; " ^
-  "    Write-Host $_.Exception.Message -ForegroundColor Red; " ^
-  "    exit 1; " ^
-  "  } " ^
-  "}"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { Write-Host 'Extracting files to: %SYSINT_DIR%' -ForegroundColor Cyan; Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%SYSINT_DIR%' -Force; if (Test-Path '%SYSINT_DIR%\psinfo.exe') { Write-Host 'Extraction completed successfully!' -ForegroundColor Green } else { Write-Host 'Extraction may have failed!' -ForegroundColor Yellow } }"
 
 if errorlevel 1 (
     echo.
