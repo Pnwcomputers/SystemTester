@@ -237,7 +237,7 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 
 ## 🗺️ Roadmap
 
-### Version 2.1 (Planned - Q1 2025)
+### Version 1.2
 * Launcher awareness in PowerShell script (detect if launched via .bat)
 * Better integration messages pointing to auto-download feature
 * Tool integrity verification (file size, signature checks)
@@ -245,7 +245,7 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 * Old report cleanup functionality
 * Configuration file support (JSON) for test customization
 
-### Version 2.2 (Planned - Q2 2025)
+### Version 1.3
 * HTML report export with charts and graphs
 * Baseline comparison mode (compare current vs. previous tests)
 * Skip flags (`-SkipCPU`, `-SkipNetwork`, etc.)
@@ -254,7 +254,7 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 * Network throughput testing
 * Advanced GPU diagnostics (if GPU-Z or similar available)
 
-### Version 3.0 (Long-term)
+### Version 2.0 (Long-term)
 * WPF/WinUI graphical interface option
 * Pluggable module system for custom tests
 * Real-time monitoring dashboard
