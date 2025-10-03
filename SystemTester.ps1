@@ -523,8 +523,7 @@ function Test-Trim {
             if ($_ -match "ReFS DisableDeleteNotify\s*=\s*(\d)") { $map["ReFS"] = $matches[1] }
         }
         $txt = $map.GetEnumerator() | ForEach-Object { 
-            $status = if ($_.Value -eq "0") { "Enabled" } else { "Disabled" }
-            "{0}: {1}" -f $_.Key, $status
+            "{0}: {1}" -f $_.Key, (if ($_.Value -eq "0") {"Enabled"} else {"Disabled"}) 
         }
         if (-not $txt) { $txt = @("TRIM status not reported") }
         $script:TestResults += @{ 
@@ -650,8 +649,7 @@ function Test-HardwareEvents {
 
         if ($ev) {
             $text = ($ev | ForEach-Object { 
-                $msgLines = ($_.Message -split "`r?`n" | Select-Object -First 2) -join " "
-                "[{0:yyyy-MM-dd HH:mm}] ID {1} {2}`n{3}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName,$msgLines
+                "[{0:yyyy-MM-dd HH:mm}] ID {1} {2}`n{3}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName,($_.Message -split "`r?`n" | Select-Object -First 2 -join " ") 
             }) -join "`n`n"
         } else {
             $text = "No WHEA entries in last 7 days"
