@@ -523,7 +523,8 @@ function Test-Trim {
             if ($_ -match "ReFS DisableDeleteNotify\s*=\s*(\d)") { $map["ReFS"] = $matches[1] }
         }
         $txt = $map.GetEnumerator() | ForEach-Object { 
-            "{0}: {1}" -f $_.Key, (if ($_.Value -eq "0") {"Enabled"} else {"Disabled"}) 
+            $status = if ($_.Value -eq "0") { "Enabled" } else { "Disabled" }
+            "{0}: {1}" -f $_.Key, $status
         }
         if (-not $txt) { $txt = @("TRIM status not reported") }
         $script:TestResults += @{ 
