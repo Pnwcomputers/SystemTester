@@ -1,33 +1,34 @@
-# 🧰 Portable Sysinternals System Tester
+# 🧰 Portable Sysinternals System Tester v2.1
 
-**Thumb-drive friendly, Windows hardware health check toolkit using Sysinternals applications**
+**Thumb-drive friendly, **Windows hardware health check toolkit** using Sysinternals applications
 
-A no-install PowerShell solution that runs a curated set of **Sysinternals** and Windows hardware diagnostics tools, then produces: **Clean Summary Report** (human-readable, de-noised) and **Detailed Report** (cleaned tool outputs). Perfect for **field diagnostics**, **baseline health checks**, and **handoff reports** to clients.
+A no-install **PowerShell solution** that runs a curated set of Sysinternals and Windows hardware diagnostics tools, then produces a **Clean Summary Report** (human-readable, de-noised) and a **Detailed Report** (cleaned tool outputs). Perfect for field diagnostics, baseline health checks, and handoff reports to clients.
 
 ---
 
 ## ✨ Key Features
 
-* 🖱️ **One-click Menu or Autorun** — interactive menu or `-AutoRun` parameter
-* 🧹 **Output Cleaner** — removes banners, EULA text, usage blocks for readable reports
-* 🧠 **Comprehensive Tests** — CPU, RAM, Disk, GPU, Network, OS Health, Windows Update status
-* 🗂️ **Smart Reporting** — timestamped **Summary** + **Detailed** TXT reports with actionable recommendations
-* 📦 **Fully Portable** — run from USB; no installation required
-* 🧰 **Graceful Degradation** — missing tools detected and skipped automatically with helpful messages
-* 🔐 **Robust Elevation Handling** — SID-based admin check (Windows Home compatible)
-* 📥 **Auto-Download Tools** — built-in Sysinternals Suite downloader (no manual setup needed!)
-* 🔄 **Windows Update Integration** — checks pending updates, history, and service status
-* ⚡ **Modern PowerShell** — uses CIM instances (not deprecated WMI) for better performance
+- 🖱️ **One-click Menu or Autorun** — Interactive menu or `-AutoRun` parameter for unattended scans.
+- 🧹 **Output Cleaner** — Removes banners, EULA text, and usage blocks for readable reports.
+- 🧠 **Comprehensive Tests** — CPU, RAM, Disk, GPU, Network, OS Health, and Windows Update status.
+- 🗂️ **Smart Reporting** — Timestamped Summary + Detailed TXT reports with actionable recommendations.
+- 📦 **Fully Portable** — Run from USB; no installation required.
+- 🧰 **Graceful Degradation** — Missing tools detected and skipped automatically with helpful messages.
+- 🔐 **Robust Elevation Handling** — SID-based admin check (Windows Home compatible).
+- 📥 **Auto-Download Tools** — Built-in Sysinternals Suite downloader (no manual setup needed!).
+- 🔄 **Windows Update Integration** — Checks pending updates, history, and service status.
+- ⚡ **Modern PowerShell** — Uses **CIM instances** (not deprecated WMI) for better performance.
+- 🔍 **Tool Integrity Verification** — Validates digital signatures and file integrity.
 
 ---
 
 ## 🧩 Requirements
 
-* **OS:** Windows 10/11 (Windows Server supported)
-* **PowerShell:** 5.1+ or PowerShell 7
-* **Permissions:** Administrator rights recommended (some tests require elevation)
-* **Internet:** Only needed for auto-download feature (optional)
-* **Sysinternals Tools:** Auto-downloadable via launcher or manual installation
+- **OS**: Windows 10/11 (Windows Server supported)
+- **PowerShell**: 5.1+ or PowerShell 7
+- **Permissions**: **Administrator rights recommended** (some tests require elevation)
+- **Internet**: Only needed for the auto-download feature (optional)
+- **Sysinternals Tools**: Auto-downloadable via launcher or manual installation
 
 ---
 
@@ -55,15 +56,15 @@ A no-install PowerShell solution that runs a curated set of **Sysinternals** and
 
 ## 🚀 Quick Start
 
-### **Option A: Batch Launcher (Recommended)**
+### Option A: Batch Launcher (Recommended)
 
-1. Download or clone this repository
-2. Run `SystemTester_Launcher.bat` (will request admin elevation)
-3. Choose **Option 6** to auto-download Sysinternals Suite (first time only)
-4. Choose **Option 1** for interactive menu or **Option 2** to run all tests
-5. Reports are saved in the script directory
+1.  Download or clone this repository
+2.  Run `SystemTester_Launcher.bat` (will request admin elevation)
+3.  Choose **Option 5** to auto-download Sysinternals Suite (**first time only**)
+4.  Choose **Option 1** for an interactive menu or **Option 2** to run all tests
+5.  Reports are saved in the script directory
 
-### **Option B: Direct PowerShell**
+### Option B: Direct PowerShell
 
 ```powershell
 # Interactive menu
@@ -159,12 +160,11 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 
 1. **Run with Interactive Menu** — Select individual tests
 2. **Run ALL Tests Automatically** — Complete system scan with auto-report
-3. **Generate Report from Previous Results** — Re-generate from current session
-4. **Fix PowerShell Execution Policy** — Set CurrentUser to RemoteSigned
-5. **Verify Sysinternals Tools Installation** — Check what's installed/missing
-6. **Download/Update Sysinternals Suite** — **NEW!** Auto-download from Microsoft
-7. **Show Help / Troubleshooting** — Comprehensive troubleshooting guide
-8. **Exit** — Close launcher
+3. **Fix PowerShell Execution Policy** — Set CurrentUser to RemoteSigned
+4. **Verify Sysinternals Tools Installation** — Check what's installed/missing
+5. **Download/Update Sysinternals Suite** — **NEW!** Auto-download from Microsoft
+6. **Show Help / Troubleshooting** — Comprehensive troubleshooting guide
+7. **Exit** — Close launcher
 
 ---
 
@@ -201,60 +201,39 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 
 ---
 
-## 📋 What's New in Version 1.0
+## 📋 What's New in Version 2.1
 
 ### ✅ Implemented Features
-* Windows Update status checking (pending updates, history, service status)
-* Auto-download functionality for Sysinternals Suite
-* Enhanced error handling with detailed messages throughout
-* Migration from deprecated WMI to modern CIM instances
-* Improved SMART data collection (legacy and modern APIs)
-* Network adapter detailed information (link speed, IP, MAC)
-* GPU/DirectX information via dxdiag
-* Battery and power efficiency reporting
-* Hardware error event logging (WHEA)
-* SSD TRIM status checking
-* 8-option launcher menu with tool verification
-* Comprehensive help and troubleshooting system
-* Better scope handling for PowerShell variables
-* Async dxdiag handling with timeout
-* Proper argument splitting for tools
-* Memory calculation fixes (KB to GB conversions)
-* Input validation in launcher
-* File size validation for downloads
-* ZIP extraction with overwrite support
+* Tool Integrity Verification — Digital signature validation for all Sysinternals tools.
+* File Size Validation — Detects corrupted or incomplete downloads.
+* Enhanced Path Handling — Fixed compatibility issues when dot-sourcing or running from various paths.
+* Improved Error Messages — More helpful guidance when tools are missing or corrupted.
 
 ### 🔄 Architecture Improvements
-* Replaced all `Get-WmiObject` with `Get-CimInstance`
-* Added `-ErrorAction Stop` to all critical operations
-* Consistent error message formatting
-* Try/catch blocks in all test functions
-* Null safety checks throughout
-* Type-safe conversions with validation
-* Clean temp file handling
+* Fixed $PSScriptRoot handling for consistent path resolution.
+* Corrected tool extension handling in verification routines.
+* Enhanced debugging output for troubleshooting.
+* Improved validation logic for tool detection.
 
 ---
 
 ## 🗺️ Roadmap
 
-### Version 1.2
-* Launcher awareness in PowerShell script (detect if launched via .bat)
-* Better integration messages pointing to auto-download feature
-* Tool integrity verification (file size, signature checks)
+### Version 2.2
 * Report history viewer in launcher
-* Old report cleanup functionality
-* Configuration file support (JSON) for test customization
-
-### Version 1.3
-* HTML report export with charts and graphs
 * Baseline comparison mode (compare current vs. previous tests)
 * Skip flags (`-SkipCPU`, `-SkipNetwork`, etc.)
-* Tunable summary verbosity levels
 * CSV export for data analysis
+* HTML report export with charts and graphs
+
+### Version 2.3
+* Configuration file support (JSON) for test customization
+* Old report cleanup functionality
+* Tunable summary verbosity levels
 * Network throughput testing
 * Advanced GPU diagnostics (if GPU-Z or similar available)
 
-### Version 2.0 (Long-term)
+### Version 3.0 (Long-term)
 * WPF/WinUI graphical interface option
 * Pluggable module system for custom tests
 * Real-time monitoring dashboard
