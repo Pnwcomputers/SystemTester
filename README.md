@@ -1,4 +1,4 @@
-# 🧰 Portable Sysinternals System Tester
+# 🧰 Portable Sysinternals System Tester (v2.2 testing)
 
 **Thumb-drive friendly, Windows hardware health check toolkit using Sysinternals applications**
 
