@@ -4,176 +4,155 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Audited and Enhanced Version - v2.3.5 (EXECUTION FLOW FIX)
+:: Production Ready Version - v2.1
 :: =====================================================
 
+:: Constants
+set "MIN_ZIP_SIZE=10000000"
+set "DOWNLOAD_TIMEOUT_SEC=120"
+set "SCRIPT_VERSION=2.1"
+
 :: =====================================================
-:: Stable self-elevation (no infinite loops, Home-safe)
+:: Reliable admin detection and elevation
 :: =====================================================
 set "_ELEV_FLAG=%~1"
 
-:: Check if running as administrator by looking for admin group SID
-whoami /groups 2>nul | findstr /c:"S-1-5-32-544" >nul 2>&1
-if errorlevel 1 (
-    :: Not elevated - check if this is a re-launch attempt
-    if /i "%_ELEV_FLAG%"=="/elevated" (
-        echo.
-        echo [ERROR] Elevation failed or was cancelled.
-        echo         Right-click this file and choose "Run as administrator".
-        echo         Or check User Account Control settings.
-     
-        echo.
-        pause
-        exit /b 1
-    )
-    
-    :: First attempt - request elevation
+:: Use net session for reliable admin check
+net session >nul 2>&1
+if %errorlevel% == 0 goto :ADMIN_CONFIRMED
+
+:: Not admin - check if this is retry after elevation attempt
+if /i "%_ELEV_FLAG%"=="/elevated" (
     echo.
-    echo ========================================================
-    echo   Administrative privileges required for full testing
-    echo ========================================================
+    echo [ERROR] Elevation failed or was cancelled.
+    echo         Right-click and choose "Run as administrator"
     echo.
-    echo Some tests require administrator rights:
-    echo   - DISM and SFC integrity checks
-    echo   - Energy/battery report generation
- 
-    echo   - Hardware SMART data access
-    - System file verification
-    echo.
-    echo Requesting elevation...
-    echo.
-    
-    :: Use PowerShell to elevate (more reliable than runas)
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-      "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs -WindowStyle Normal"
-    
-    if errorlevel 1 (
-        echo [ERROR] Failed to request elevation.
-        echo         Please run this file as administrator manually.
-        pause
-    )
-    exit /b
+    pause
+    exit /b 1
 )
 
-:: =====================================================
-:: We're elevated from here on
-:: =====================================================
-title Portable Sysinternals System Tester Launcher v2.3.5
+:: Request elevation
+echo.
+echo ========================================================
+echo   Administrative privileges required for full testing
+echo ========================================================
+echo.
+echo Some tests require administrator rights:
+echo   - DISM and SFC integrity checks
+echo   - Energy/battery report generation
+echo   - Hardware SMART data access
+echo   - System file verification
+echo.
+echo Requesting elevation...
+echo.
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs"
+
+if errorlevel 1 (
+    echo [ERROR] Failed to elevate. Run manually as administrator.
+    pause
+)
+exit /b
+
+:ADMIN_CONFIRMED
+title Portable Sysinternals System Tester v%SCRIPT_VERSION%
 color 0B
 
-:: Work from the script folder (prevents System32 drift on elevation)
+:: Change to script directory
 cd /d "%~dp0" 2>nul
 if errorlevel 1 (
-    echo [ERROR] Cannot change to script directory: %~dp0
-    echo         Check permissions and path length.
+    echo [ERROR] Cannot access directory: %~dp0
     pause
     exit /b 1
 )
 
 echo ========================================================
-echo      PORTABLE SYSINTERNALS SYSTEM TESTER LAUNCHER
+echo   PORTABLE SYSINTERNALS SYSTEM TESTER v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-:: Resolve script directory and drive letter
+
+:: Set paths
 set "SCRIPT_DIR=%cd%"
 set "DRIVE_LETTER=%~d0"
-
-:: Construct path to PowerShell script
 set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
+
+:: Check path length
+for /f %%i in ('powershell -NoProfile -Command "('%SCRIPT_DIR%').Length" 2^>nul') do set "PATH_LENGTH=%%i"
+if "%PATH_LENGTH%"=="" set "PATH_LENGTH=0"
+if %PATH_LENGTH% GTR 200 (
+    echo [WARNING] Path is %PATH_LENGTH% chars. Move to shorter path if errors occur.
+    timeout /t 2 >nul
+)
 
 echo Running from: %DRIVE_LETTER%
 echo Script directory: %SCRIPT_DIR%
-echo PowerShell script: %SCRIPT_PS1%
+echo Path length: %PATH_LENGTH% characters
 echo.
-:: Validate the PowerShell script exists
+
+:: Verify PowerShell script exists
 if not exist "%SCRIPT_PS1%" (
-    echo [ERROR] PowerShell script not found.
-    echo         Expected: %SCRIPT_PS1%
+    echo [ERROR] PowerShell script not found: %SCRIPT_PS1%
     echo.
-    echo Please ensure SystemTester.ps1 is in the same folder as this launcher.
-    echo.
-    pause
-    exit /b 1
-)
-
-:: Check PowerShell availability and version
-echo Checking PowerShell availability...
-powershell -NoProfile -Command "$PSVersionTable.PSVersion.ToString()" >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] PowerShell is not available on this system.
-    echo   
-    echo       This launcher requires Windows PowerShell 5.1 or later.
-    echo.
-    echo Please install Windows Management Framework 5.1 or later.
+    echo Ensure SystemTester.ps1 is in the same folder.
     echo.
     pause
     exit /b 1
 )
 
-:: Get and display PowerShell version
-for /f "tokens=*" %%v in ('powershell -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"') do (
-    set "PS_VERSION=%%v"
+:: Check PowerShell version
+echo Checking PowerShell...
+for /f "tokens=*" %%v in ('powershell -NoProfile -Command "$PSVersionTable.PSVersion.ToString()" 2^>nul') do set "PS_VERSION=%%v"
+if "%PS_VERSION%"=="" (
+    echo [ERROR] PowerShell not available or too old.
+    echo Requires PowerShell 5.1 or later.
+    pause
+    exit /b 1
 )
 echo PowerShell version: %PS_VERSION%
 echo.
-:: Check if Sysinternals folder exists
+
+:: Check for Sysinternals folder
 if not exist "%SCRIPT_DIR%\Sysinternals" (
     echo [WARNING] Sysinternals folder not found!
-    echo           Expected location: %SCRIPT_DIR%\Sysinternals\
+    echo Use Menu Option 5 to download automatically.
     echo.
-    echo ACTION: Use Menu Option 6 to download tools automatically.
-    echo.
-    timeout /t 3 >nul
+    timeout /t 2 >nul
 )
 
 :MENU
 cls
 echo ========================================================
-echo      PORTABLE SYSINTERNALS SYSTEM TESTER LAUNCHER
+echo   PORTABLE SYSINTERNALS SYSTEM TESTER v%SCRIPT_VERSION%
 echo ========================================================
 echo.
 echo Drive: %DRIVE_LETTER% ^| Directory: %SCRIPT_DIR%
-echo PowerShell Version: %PS_VERSION%
-echo Status: Running with Administrator privileges
+echo PowerShell: %PS_VERSION% ^| Admin: YES
 echo.
 echo --------------------------------------------------------
 echo                    MAIN MENU
 echo --------------------------------------------------------
 echo.
-echo 1. Run with Interactive Menu (Recommended)
+echo 1. Run Interactive Menu (Recommended)
 echo 2. Run ALL Tests Automatically
-echo 3. Generate Report from Previous Test Results
-echo 4. Fix PowerShell Execution Policy (CurrentUser)
-echo 5. Verify Sysinternals Tools Installation (Integrity Check)
-echo 6. Download/Update Sysinternals Suite (Auto)
-echo 7. Show Help / Troubleshooting
-echo 8. Exit
+echo 3. Fix PowerShell Execution Policy
+echo 4. Verify Tool Integrity (Signatures)
+echo 5. Download/Update Sysinternals Suite
+echo 6. Help / Troubleshooting
+echo 7. Exit
 echo.
 echo --------------------------------------------------------
-set /p "choice=Choose an option (1-8): "
-
-:: Validate input is a number between 1-8
-echo %choice%| findstr /r "^[1-8]$" >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo [ERROR] Invalid choice. Please enter a number between 1 and 8.
-    timeout /t 2 >nul
-    goto MENU
-)
+set /p "choice=Choose an option (1-7): "
 
 if "%choice%"=="1" goto INTERACTIVE
 if "%choice%"=="2" goto AUTORUN
-if "%choice%"=="3" goto REPORT_ONLY
-if "%choice%"=="4" goto FIXPOLICY
-if "%choice%"=="5" goto VERIFY_TOOLS
-if "%choice%"=="6" goto DOWNLOAD_TOOLS
-if "%choice%"=="7" goto HELP
-if "%choice%"=="8" goto EXIT
+if "%choice%"=="3" goto FIXPOLICY
+if "%choice%"=="4" goto VERIFY
+if "%choice%"=="5" goto DOWNLOAD
+if "%choice%"=="6" goto HELP
+if "%choice%"=="7" goto EXIT
 
-:: Fallback (should never reach here due to validation)
-echo Invalid choice.
-Please try again.
-timeout /t 2 >nul
+echo Invalid choice. Try again.
+timeout /t 1 >nul
 goto MENU
 
 :INTERACTIVE
@@ -182,21 +161,14 @@ echo ========================================================
 echo              STARTING INTERACTIVE MODE
 echo ========================================================
 echo.
-echo Press any key to launch...
-pause >nul
-echo.
-
+pause
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%"
-
+echo.
 if errorlevel 1 (
-    echo.
-    echo [ERROR] Script encountered an error (exit code: %errorlevel%).
-    echo         Check the output above for details.
-    echo.
+    echo [ERROR] Script failed (code: %errorlevel%)
     pause
 ) else (
-    echo.
-    echo Script completed successfully.
+    echo Completed successfully.
     timeout /t 2 >nul
 )
 goto MENU
@@ -207,40 +179,20 @@ echo ========================================================
 echo           RUNNING ALL TESTS AUTOMATICALLY
 echo ========================================================
 echo.
-echo Press any key to start, or Ctrl+C to cancel...
-pause >nul
+echo This will run 15 test suites and generate reports.
+echo May take 10-30 minutes depending on your system.
+echo.
+pause
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -AutoRun
-
+echo.
 if errorlevel 1 (
-    echo.
-    echo [ERROR] Script encountered an error (exit code: %errorlevel%).
-    echo         Check the output above for details.
-    echo.
+    echo [ERROR] Tests failed (code: %errorlevel%)
     pause
 ) else (
-    echo.
-    echo All tests completed successfully.
-    echo Check the script directory for generated reports.
+    echo All tests completed. Check directory for reports.
     timeout /t 3 >nul
 )
-goto MENU
-
-:REPORT_ONLY
-echo.
-echo ========================================================
-echo         GENERATE REPORT FROM PREVIOUS RESULTS
-echo ========================================================
-echo.
-echo Press any key to continue, or Ctrl+C to cancel...
-pause >nul
-echo.
-:: Simple launch of the main script, relying on the user to run tests first.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%"
-
-echo.
-echo Note: This relies on tests being run in the preceding PowerShell session.
-pause
 goto MENU
 
 :FIXPOLICY
@@ -249,59 +201,87 @@ echo ========================================================
 echo          FIXING POWERSHELL EXECUTION POLICY
 echo ========================================================
 echo.
-echo Press any key to continue, or Ctrl+C to cancel...
-pause >nul
+echo Current policy:
+powershell -NoProfile -Command "Get-ExecutionPolicy -List | Format-Table -AutoSize"
 echo.
-:: Simple execution is stable
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction Stop; Write-Host 'SUCCESS: Policy set to RemoteSigned.' -ForegroundColor Green; Write-Host 'Press Enter to continue'; $null=Read-Host"
-
+echo Setting to RemoteSigned for CurrentUser...
+powershell -NoProfile -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; Write-Host 'SUCCESS' -ForegroundColor Green"
 echo.
 pause
 goto MENU
 
-:VERIFY_TOOLS
+:VERIFY
 echo.
 echo ========================================================
-echo      VERIFYING SYSINTERNALS TOOLS INTEGRITY (v2.3.5)
+echo       TOOL INTEGRITY VERIFICATION
 echo ========================================================
 echo.
-echo Press any key to continue...
-pause >nul
+echo This will check digital signatures and file sizes
+echo of all Sysinternals tools in your installation.
 echo.
-:: FIX: Define the variable first, then dot-source and call function.
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$script:ExternalCall = $true; . '%SCRIPT_PS1%' ; Test-ToolVerification ; Write-Host 'Verification complete. Press Enter to continue...'; $null=Read-Host"
-
+pause
+echo.
+:: Call the PowerShell function for tool verification
+powershell -NoProfile -ExecutionPolicy Bypass -Command ". '%SCRIPT_PS1%'; Test-ToolVerification"
+echo.
 pause
 goto MENU
 
-:DOWNLOAD_TOOLS
+:DOWNLOAD
 echo.
 echo ========================================================
-echo      DOWNLOAD/UPDATE SYSINTERNALS SUITE AUTOMATICALLY
+echo      DOWNLOAD/UPDATE SYSINTERNALS SUITE
 echo ========================================================
 echo.
 set "SYSINT_DIR=%SCRIPT_DIR%\Sysinternals"
+set "ZIP_FILE=%SCRIPT_DIR%\SysinternalsSuite.zip"
 set "DOWNLOAD_URL=https://download.sysinternals.com/files/SysinternalsSuite.zip"
 
-echo This will download the latest Sysinternals Suite.
+echo This will download ~35MB from Microsoft.
+echo Target: %SYSINT_DIR%
 echo.
-set /p "confirm=Proceed with download? (Y/N): "
-if /i not "!confirm!"=="Y" (
-    echo Download cancelled.
-    timeout /t 2 >nul
+set /p "confirm=Proceed? (Y/N): "
+if /i not "%confirm%"=="Y" goto MENU
+
+echo.
+echo Downloading...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%ZIP_FILE%' -TimeoutSec %DOWNLOAD_TIMEOUT_SEC%; Write-Host 'Download complete' -ForegroundColor Green } catch { Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
+
+if errorlevel 1 (
+    echo.
+    echo Download failed. Check internet connection.
+    if exist "%ZIP_FILE%" del "%ZIP_FILE%" 2>nul
+    pause
     goto MENU
 )
 
-echo.
-echo Starting download and extraction...
-echo.
+if not exist "%ZIP_FILE%" (
+    echo [ERROR] Download failed - file not created
+    pause
+    goto MENU
+)
 
-:: FIX (v2.3.5): Define the variable first, then dot-source and call function.
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$script:ExternalCall = $true; . '%SCRIPT_PS1%' ; Download-SysinternalsSuite ; Write-Host 'Download process finished. Press Enter to continue...'; $null=Read-Host"
+for %%A in ("%ZIP_FILE%") do set "FILE_SIZE=%%~zA"
+if %FILE_SIZE% LSS %MIN_ZIP_SIZE% (
+    echo [ERROR] File too small (%FILE_SIZE% bytes^)
+    del "%ZIP_FILE%" 2>nul
+    pause
+    goto MENU
+)
 
+echo File downloaded: %FILE_SIZE% bytes
+echo.
+echo Extracting...
+if not exist "%SYSINT_DIR%" mkdir "%SYSINT_DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%SYSINT_DIR%' -Force; Write-Host 'Extracted successfully' -ForegroundColor Green"
+
+del "%ZIP_FILE%" 2>nul
+echo.
+set "TOOL_COUNT=0"
+for %%F in ("%SYSINT_DIR%\*.exe") do set /a TOOL_COUNT+=1
+echo [SUCCESS] %TOOL_COUNT% tools installed in %SYSINT_DIR%
+echo.
+echo TIP: Use Menu Option 4 to verify tool integrity
 echo.
 pause
 goto MENU
@@ -309,47 +289,76 @@ goto MENU
 :HELP
 cls
 echo ========================================================
-echo                HELP / TROUBLESHOOTING GUIDE
+echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo COMMON ISSUES AND SOLUTIONS:
+echo NEW IN v2.1:
+echo   - Tool integrity verification (digital signatures)
+echo   - Dual report system (Clean + Detailed)
+echo   - Fixed memory usage calculation bug
+echo   - Launcher awareness detection
+echo   - Enhanced error messages
 echo.
 echo --------------------------------------------------------
-echo 1. SCRIPT WINDOW CLOSES IMMEDIATELY OR "CRASHES"
+echo COMMON ISSUES:
 echo --------------------------------------------------------
-echo    Solution:
-echo    - This version (v2.3.5) uses the most stable command structure.
-echo    - If a window still closes instantly, your system has a deeper problem.
-echo    - Open Command Prompt first (cmd.exe) and drag this batch file into it.
+echo.
+echo 1. EXECUTION POLICY ERRORS
+echo    Solution: Use Menu Option 3
+echo.
+echo 2. SYSINTERNALS TOOLS NOT FOUND
+echo    Solution: Use Menu Option 5 to download
+echo.
+echo 3. TOOLS MAY BE CORRUPTED
+echo    Solution: Use Menu Option 4 to verify integrity
+echo              Then Option 5 to re-download if needed
+echo.
+echo 4. DOWNLOAD FAILS
+echo    Causes: Firewall, proxy, no internet
+echo    Solution: Manual download from:
+echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
+echo    Extract to: %SCRIPT_DIR%\Sysinternals\
+echo.
+echo 5. MEMORY SHOWS 100%% (but Task Manager shows less)
+echo    This was a bug in v2.08 - FIXED in v2.1
+echo.
+echo 6. TESTS TAKE TOO LONG
+echo    Expected durations:
+echo    - CPU Test: 10 seconds
+echo    - Energy Report: 15 seconds
+echo    - Windows Update: 30-90 seconds
+echo    - DISM/SFC: 5-15 minutes each
+echo.
+echo 7. REPORTS NOT GENERATED
+echo    - Check write permissions
+echo    - Ensure tests completed
+echo    - Look for SystemTest_Clean_*.txt
+echo.
+echo 8. PATH TOO LONG
+echo    Current: %PATH_LENGTH% characters
+echo    Limit: 260 characters
+echo    Solution: Move to C:\SysTest\
 echo.
 echo --------------------------------------------------------
-echo 2. EXECUTION POLICY ERRORS
+echo FEATURES:
 echo --------------------------------------------------------
-echo    Error: "cannot be loaded because running scripts is disabled"
 echo.
-echo    Solution:
-echo    - Use Menu Option 4 to fix automatically
+echo REPORT TYPES:
+echo   Clean Report - Summary with key findings
+echo   Detailed Report - Full output from all tests
 echo.
-echo --------------------------------------------------------
-echo 3. SYSINTERNALS TOOLS NOT FOUND
-echo --------------------------------------------------------
-echo    Error: "Sysinternals folder not found" or tools skipped
+echo TOOL VERIFICATION:
+echo   Checks digital signatures of all tools
+echo   Validates file sizes
+echo   Identifies Microsoft-signed vs others
 echo.
-echo    Solution:
-echo    - Use Menu Option 6 to download automatically
+echo ADMIN DETECTION:
+echo   Auto-elevates on startup
+echo   Skips admin-required tests when not elevated
+echo   Shows clear warnings about limitations
 echo.
-echo --------------------------------------------------------
-echo 4. PERMISSION / ACCESS DENIED ERRORS
-echo --------------------------------------------------------
-echo    Solution:
-echo    - This launcher auto-elevates (requires UAC prompt)
-echo.
-echo --------------------------------------------------------
-echo 5. REPORTS NOT GENERATING
-echo --------------------------------------------------------
-echo    Solution:
-    - Check script directory write permissions
-    - Ensure tests have been run first
+echo SUPPORT:
+echo   https://docs.microsoft.com/sysinternals
 echo.
 pause
 goto MENU
@@ -358,7 +367,13 @@ goto MENU
 echo.
 echo ========================================================
 echo Thank you for using Portable Sysinternals System Tester!
+echo                    Version %SCRIPT_VERSION%
 echo ========================================================
+echo.
+echo Reports saved in: %SCRIPT_DIR%
+echo   - SystemTest_Clean_*.txt (summary)
+echo   - SystemTest_Detailed_*.txt (full output)
+echo   - energy-report.html (if power test ran)
 echo.
 timeout /t 2 >nul
 exit /b 0
