@@ -10,7 +10,7 @@ setlocal enableextensions enabledelayedexpansion
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
 set "DOWNLOAD_TIMEOUT_SEC=120"
-set "SCRIPT_VERSION=2.3"
+set "SCRIPT_VERSION=2.2"
 
 :: =====================================================
 :: Reliable admin detection and elevation
