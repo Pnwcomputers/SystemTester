@@ -4,6 +4,41 @@
 
 A no-install **PowerShell solution** that runs a curated set of Sysinternals and Windows hardware diagnostics tools, then produces a **Clean Summary Report** (human-readable, de-noised) and a **Detailed Report** (cleaned tool outputs). Perfect for field diagnostics, baseline health checks, and handoff reports to clients.
 
+## 🚀 New Features Added
+### Network Speed Testing (New Menu Option 8)
+A comprehensive network speed testing function that includes:
+- Local Network Connectivity Testing
+- Gateway reachability test using Test-NetConnection
+- Automatic detection of default gateway
+
+### Internet Connectivity Tests
+- Tests connectivity to multiple endpoints (Google DNS, Cloudflare DNS, Google.com, Microsoft.com)
+- Port-specific testing (DNS port 53, HTTPS port 443)
+
+###Latency Testing
+- Ping tests to multiple targets (8.8.8.8, 1.1.1.1, google.com)
+- Detailed round-trip time measurements using Test-NetConnection
+
+### PSPing Integration (if available in Sysinternals folder)
+- Advanced latency testing with 10 iterations
+- TCP bandwidth capacity testing
+- Connection quality analysis
+
+### DNS Resolution Speed Testing
+- Tests DNS lookup speed for multiple domains
+- Measures resolution time in milliseconds
+
+### Network MTU Discovery
+- Checks if standard MTU (1500 bytes) works without fragmentation
+- Helps identify potential network configuration issues
+
+## 📋 Key Enhancements
+1. Version bumped to 2.3 to reflect the new features
+2. Added "psping" to the tool verification list
+3. Network Speed Tests appear as menu option 8 (highlighted in cyan as NEW)
+4. All network tests integrate seamlessly with the existing reporting system
+5. Both clean and detailed reports will include network speed test results
+
 ---
 
 ## ✨ Key Features
