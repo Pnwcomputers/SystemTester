@@ -4,13 +4,13 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Production Ready Version - v2.1
+:: Production Ready Version - v2.2
 :: =====================================================
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
 set "DOWNLOAD_TIMEOUT_SEC=120"
-set "SCRIPT_VERSION=2.1"
+set "SCRIPT_VERSION=2.3"
 
 :: =====================================================
 :: Reliable admin detection and elevation
@@ -119,6 +119,15 @@ if not exist "%SCRIPT_DIR%\Sysinternals" (
     timeout /t 2 >nul
 )
 
+:: Check for PSPing specifically (for network speed tests)
+if exist "%SCRIPT_DIR%\Sysinternals\psping.exe" (
+    echo [INFO] PSPing detected - Full network speed tests available
+) else (
+    echo [INFO] PSPing not found - Basic network tests only
+    echo       Download Sysinternals Suite for full network testing
+)
+echo.
+
 :MENU
 cls
 echo ========================================================
@@ -179,8 +188,11 @@ echo ========================================================
 echo           RUNNING ALL TESTS AUTOMATICALLY
 echo ========================================================
 echo.
-echo This will run 15 test suites and generate reports.
+echo This will run 16 test suites and generate reports.
 echo May take 10-30 minutes depending on your system.
+echo.
+echo Tests include: System Info, CPU, RAM, Storage, Network,
+echo Network Speed (NEW), Processes, Security, and more...
 echo.
 pause
 echo.
@@ -240,6 +252,8 @@ set "DOWNLOAD_URL=https://download.sysinternals.com/files/SysinternalsSuite.zip"
 echo This will download ~35MB from Microsoft.
 echo Target: %SYSINT_DIR%
 echo.
+echo NOTE: Includes PSPing for advanced network speed testing
+echo.
 set /p "confirm=Proceed? (Y/N): "
 if /i not "%confirm%"=="Y" goto MENU
 
@@ -281,6 +295,15 @@ set "TOOL_COUNT=0"
 for %%F in ("%SYSINT_DIR%\*.exe") do set /a TOOL_COUNT+=1
 echo [SUCCESS] %TOOL_COUNT% tools installed in %SYSINT_DIR%
 echo.
+
+:: Check specifically for PSPing
+if exist "%SYSINT_DIR%\psping.exe" (
+    echo [SUCCESS] PSPing installed - Network speed tests enabled!
+) else (
+    echo [WARNING] PSPing not found - Basic network tests only
+)
+
+echo.
 echo TIP: Use Menu Option 4 to verify tool integrity
 echo.
 pause
@@ -292,7 +315,15 @@ echo ========================================================
 echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo NEW IN v2.1:
+echo NEW IN v2.3:
+echo   - Network Speed Testing with PSPing and Test-NetConnection
+echo   - Local and Internet connectivity tests
+echo   - Bandwidth capacity testing
+echo   - DNS resolution speed measurements
+echo   - Network MTU discovery
+echo   - Gateway and latency testing
+echo.
+echo NEW IN v2.1-2.2:
 echo   - Tool integrity verification (digital signatures)
 echo   - Dual report system (Clean + Detailed)
 echo   - Fixed memory usage calculation bug
@@ -320,21 +351,27 @@ echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
 echo    Extract to: %SCRIPT_DIR%\Sysinternals\
 echo.
 echo 5. MEMORY SHOWS 100%% (but Task Manager shows less)
-echo    This was a bug in v2.08 - FIXED in v2.1
+echo    This was a bug in v2.08 - FIXED in v2.1+
 echo.
-echo 6. TESTS TAKE TOO LONG
+echo 6. NETWORK SPEED TESTS LIMITED
+echo    Cause: PSPing.exe not found
+echo    Solution: Download Sysinternals Suite (Option 5)
+echo    PSPing enables: Bandwidth testing, TCP latency
+echo.
+echo 7. TESTS TAKE TOO LONG
 echo    Expected durations:
 echo    - CPU Test: 10 seconds
+echo    - Network Speed: 30-60 seconds
 echo    - Energy Report: 15 seconds
 echo    - Windows Update: 30-90 seconds
 echo    - DISM/SFC: 5-15 minutes each
 echo.
-echo 7. REPORTS NOT GENERATED
+echo 8. REPORTS NOT GENERATED
 echo    - Check write permissions
 echo    - Ensure tests completed
 echo    - Look for SystemTest_Clean_*.txt
 echo.
-echo 8. PATH TOO LONG
+echo 9. PATH TOO LONG
 echo    Current: %PATH_LENGTH% characters
 echo    Limit: 260 characters
 echo    Solution: Move to C:\SysTest\
@@ -342,6 +379,14 @@ echo.
 echo --------------------------------------------------------
 echo FEATURES:
 echo --------------------------------------------------------
+echo.
+echo NETWORK SPEED TESTING (NEW):
+echo   - Gateway connectivity tests
+echo   - Internet endpoint testing (Google, Cloudflare, MS)
+echo   - Latency measurements to multiple servers
+echo   - PSPing bandwidth capacity testing
+echo   - DNS resolution speed testing
+echo   - MTU path discovery
 echo.
 echo REPORT TYPES:
 echo   Clean Report - Summary with key findings
