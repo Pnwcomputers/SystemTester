@@ -1,11 +1,12 @@
-# Portable Sysinternals System Tester
+# Portable Sysinternals System Tester - Enhanced Version
 # Created by Pacific Northwest Computers - 2025
-# Complete Production Version - v2.1
+# Complete Production Version - v2.3
+# Enhanced with Network Speed Testing
 
 param([switch]$AutoRun)
 
 # Constants
-$script:VERSION = "2.1"
+$script:VERSION = "2.3"
 $script:DXDIAG_TIMEOUT = 45
 $script:ENERGY_DURATION = 15
 $script:CPU_TEST_SECONDS = 10
@@ -13,7 +14,7 @@ $script:MAX_PATH_LENGTH = 240
 $script:MIN_TOOL_SIZE_KB = 50
 
 # Paths
-$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $DriveLetter = (Split-Path -Qualifier $ScriptRoot).TrimEnd('\')
 $SysinternalsPath = Join-Path $ScriptRoot "Sysinternals"
 
@@ -107,9 +108,9 @@ function Test-ToolVerification {
     Write-Host ""
     
     $allTools = @(
-        "psinfo.exe","coreinfo.exe","pslist.exe","handle.exe","clockres.exe",
-        "autorunsc.exe","du.exe","streams.exe","contig.exe","sigcheck.exe",
-        "testlimit.exe","diskext.exe","listdlls.exe"
+    "psinfo","coreinfo","pslist","handle","clockres",
+    "autorunsc","du","streams","contig","sigcheck",
+    "testlimit","diskext","listdlls","psping"  # Added psping for network testing
     )
     
     $stats = @{
@@ -197,74 +198,24 @@ function Initialize-Environment {
         return $false
     }
 
-    # Check for key tools
-    $tools = @("psinfo.exe","coreinfo.exe","pslist.exe","handle.exe","clockres.exe")
-    $found = 0
-    $missing = @()
-    foreach ($tool in $tools) {
-        if (Test-Path (Join-Path $SysinternalsPath $tool)) {
-            $found++
-        } else {
-            $missing += $tool
+    # Run verification
+    Test-ToolVerification
+
+    # Check for critical tools
+    $criticalMissing = @()
+    @("psinfo", "coreinfo") | ForEach-Object {
+        if (!(Test-Path (Join-Path $SysinternalsPath "$_.exe"))) {
+            $criticalMissing += $_
         }
     }
 
-    if ($found -eq 0) {
-        Write-Host "ERROR: No tools found in $SysinternalsPath" -ForegroundColor Red
-        if ($script:LaunchedViaBatch) {
-            Write-Host "ACTION: Use Batch Menu Option 5 to download tools" -ForegroundColor Yellow
-        }
+    if ($criticalMissing.Count -gt 0) {
+        Write-Host "ERROR: Critical tools missing: $($criticalMissing -join ', ')" -ForegroundColor Red
         return $false
     }
 
-    Write-Host "Found $found/$($tools.Count) key tools" -ForegroundColor Green
-    if ($missing.Count -gt 0) {
-        Write-Host "Missing: $($missing -join ', ')" -ForegroundColor Yellow
-        if ($script:LaunchedViaBatch) {
-            Write-Host "TIP: Use Batch Menu Option 4 for integrity check" -ForegroundColor DarkYellow
-            Write-Host "     Use Batch Menu Option 5 to update tools" -ForegroundColor DarkYellow
-        }
-    }
+    Write-Host "Initialization complete" -ForegroundColor Green
     return $true
-}
-
-# Clean tool output
-function Clean-ToolOutput {
-    param([string]$ToolName, [string]$RawOutput)
-    if (!$RawOutput) { return "" }
-
-    $lines = $RawOutput -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-    $cleaned = @()
-
-    foreach ($line in $lines) {
-        # Skip boilerplate
-        if ($line -match "Copyright|Sysinternals|www\.|EULA|Mark Russinovich|David Solomon|Bryce Cogswell") { continue }
-        if ($line -match "^-+$|^=+$|^\*+$") { continue }
-
-        # Tool-specific filtering
-        switch ($ToolName) {
-            "psinfo" {
-                if ($line -match "^(System|Uptime|Kernel|Product|Service|Build|Processors|Physical|Computer|Domain|Install)") {
-                    $cleaned += $line
-                }
-            }
-            "coreinfo" {
-                if ($line -match "^(Intel|AMD|Logical|Cores|Processor|CPU|Cache|Feature|\s+\*)") {
-                    $cleaned += $line
-                }
-            }
-            "pslist" {
-                if ($line -match "^(Name|Process|Pid)\s+|^\w+\s+\d+") {
-                    $cleaned += $line
-                }
-            }
-            default {
-                if ($line.Length -lt 200) { $cleaned += $line }
-            }
-        }
-    }
-
-    return ($cleaned | Select-Object -First 40) -join "`n"
 }
 
 # Run tool
@@ -272,125 +223,130 @@ function Run-Tool {
     param(
         [string]$ToolName,
         [string]$Args = "",
-        [string]$Description = "",
-        [bool]$RequiresAdmin = $false
+        [string]$Description,
+        [int]$TimeoutSeconds = 10
     )
-
-    if ($RequiresAdmin -and -not $script:IsAdmin) {
-        Write-Host "SKIP: $ToolName (requires admin)" -ForegroundColor Yellow
-        $script:TestResults += @{
-            Tool=$ToolName; Description=$Description
-            Status="SKIPPED"; Output="Requires administrator privileges"; Duration=0
-        }
-        return
-    }
 
     $toolPath = Join-Path $SysinternalsPath "$ToolName.exe"
     if (!(Test-Path $toolPath)) {
-        Write-Host "SKIP: $ToolName (not found)" -ForegroundColor Yellow
+        Write-Host "$ToolName not found" -ForegroundColor Red
+        $script:TestResults += @{
+            Tool=$ToolName; Description=$Description
+            Status="MISSING"; Output="Tool not found"; Duration=0
+        }
         return
     }
 
-    Write-Host "Running $ToolName..." -ForegroundColor Cyan
     try {
+        $info = New-Object System.Diagnostics.ProcessStartInfo
+        $info.FileName = $toolPath
+        $info.Arguments = $Args
+        $info.UseShellExecute = $false
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        $info.CreateNoWindow = $true
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $info
+        
         $start = Get-Date
-        if ($ToolName -in @("psinfo","pslist","handle","autorunsc","testlimit","contig")) {
-            $Args = "-accepteula $Args"
+        $process.Start() | Out-Null
+        
+        $output = ""
+        $finished = $process.WaitForExit($TimeoutSeconds * 1000)
+        
+        if ($finished) {
+            $output = $process.StandardOutput.ReadToEnd()
+            $error = $process.StandardError.ReadToEnd()
+            if ($error) { $output += "`nERROR: $error" }
+            $duration = ((Get-Date) - $start).TotalMilliseconds
+            
+            $script:TestResults += @{
+                Tool=$ToolName; Description=$Description
+                Status="SUCCESS"; Output=$output; Duration=$duration
+            }
+            Write-Host "$ToolName completed successfully" -ForegroundColor Green
+        } else {
+            $process.Kill()
+            $script:TestResults += @{
+                Tool=$ToolName; Description=$Description
+                Status="TIMEOUT"; Output="Process timed out after $TimeoutSeconds seconds"; Duration=($TimeoutSeconds*1000)
+            }
+            Write-Host "$ToolName timed out" -ForegroundColor Yellow
         }
-
-        $argArray = if ($Args.Trim()) { $Args.Split(' ') | Where-Object { $_ } } else { @() }
-        $rawOutput = & $toolPath $argArray 2>&1 | Out-String
-        $duration = ((Get-Date) - $start).TotalMilliseconds
-        $cleanOutput = Clean-ToolOutput -ToolName $ToolName -RawOutput $rawOutput
-
+    } catch {
         $script:TestResults += @{
             Tool=$ToolName; Description=$Description
-            Status="SUCCESS"; Output=$cleanOutput; Duration=$duration
+            Status="ERROR"; Output=$_.Exception.Message; Duration=0
         }
-        Write-Host "OK: $ToolName ($([math]::Round($duration))ms)" -ForegroundColor Green
-    }
-    catch {
-        $script:TestResults += @{
-            Tool=$ToolName; Description=$Description
-            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0
-        }
-        Write-Host "ERROR: $ToolName - $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "$ToolName error: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
 # Test: System Info
 function Test-SystemInfo {
     Write-Host "`n=== System Information ===" -ForegroundColor Green
-    Run-Tool -ToolName "psinfo" -Args "-h -s -d" -Description "System information"
-    Run-Tool -ToolName "clockres" -Description "Clock resolution"
-
-    try {
-        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
-        $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
-        $info = @"
-OS: $($os.Caption) $($os.Version)
-Architecture: $($os.OSArchitecture)
-Computer: $($cs.Name)
-Manufacturer: $($cs.Manufacturer)
-Model: $($cs.Model)
-RAM: $([math]::Round($cs.TotalPhysicalMemory/1GB,2)) GB
-"@
-        $script:TestResults += @{
-            Tool="System-Overview"; Description="System overview"
-            Status="SUCCESS"; Output=$info; Duration=100
-        }
-        Write-Host "System overview collected" -ForegroundColor Green
-    } catch {
-        Write-Host "Error getting system info" -ForegroundColor Red
-    }
+    Run-Tool -ToolName "psinfo" -Args "-s -d /accepteula" -Description "System information"
+    Run-Tool -ToolName "coreinfo" -Args "-c /accepteula" -Description "CPU core information"
 }
 
 # Test: CPU
 function Test-CPU {
     Write-Host "`n=== CPU Testing ===" -ForegroundColor Green
-    Run-Tool -ToolName "coreinfo" -Args "-v -f -c" -Description "CPU architecture"
-
+    
+    # Basic CPU info
     try {
         $cpu = Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1
         $info = @"
-CPU: $($cpu.Name)
+Name: $($cpu.Name)
 Cores: $($cpu.NumberOfCores)
-Logical: $($cpu.NumberOfLogicalProcessors)
-Speed: $($cpu.MaxClockSpeed) MHz
-L2 Cache: $($cpu.L2CacheSize) KB
-L3 Cache: $($cpu.L3CacheSize) KB
+Logical Processors: $($cpu.NumberOfLogicalProcessors)
+Max Clock: $($cpu.MaxClockSpeed) MHz
+Current Clock: $($cpu.CurrentClockSpeed) MHz
 "@
         $script:TestResults += @{
-            Tool="CPU-Details"; Description="CPU details"
-            Status="SUCCESS"; Output=$info; Duration=100
+            Tool="CPU-Info"; Description="CPU details"
+            Status="SUCCESS"; Output=$info; Duration=50
         }
-        Write-Host "CPU details collected" -ForegroundColor Green
+        Write-Host "CPU: $($cpu.Name)" -ForegroundColor Green
     } catch {
-        Write-Host "Error getting CPU details" -ForegroundColor Yellow
+        Write-Host "Error getting CPU info" -ForegroundColor Red
     }
-
-    Write-Host "Running CPU test ($script:CPU_TEST_SECONDS sec - synthetic)..." -ForegroundColor Yellow
+    
+    Run-Tool -ToolName "pslist" -Args "-s 1" -Description "Process list snapshot"
+    Run-Tool -ToolName "handle" -Args "/accepteula" -Description "Handle information" -TimeoutSeconds 5
+    Run-Tool -ToolName "clockres" -Description "Clock resolution"
+    
+    # CPU stress test
+    Write-Host "Starting CPU test ($script:CPU_TEST_SECONDS seconds)..." -ForegroundColor Yellow
     try {
         $start = Get-Date
-        $end = $start.AddSeconds($script:CPU_TEST_SECONDS)
-        $counter = 0
-        while ((Get-Date) -lt $end) {
-            $counter++
-            [math]::Sqrt($counter) | Out-Null
+        $maxValue = [Math]::Pow(2,20)
+        $endTime = $start.AddSeconds($script:CPU_TEST_SECONDS)
+        $iterations = 0
+        
+        while ((Get-Date) -lt $endTime) {
+            $result = 1
+            for ($i = 1; $i -le 100; $i++) {
+                $result = ($result * $i) % $maxValue
+            }
+            $iterations++
         }
+        
         $duration = ((Get-Date) - $start).TotalSeconds
-        $opsPerSec = [math]::Round($counter / $duration)
+        $opsPerSecond = [Math]::Round($iterations / $duration, 2)
+        
         $script:TestResults += @{
-            Tool="CPU-Performance"; Description="CPU performance test (synthetic)"
-            Status="SUCCESS"; Output="Operations: $counter`nOps/sec: $opsPerSec`nNote: Synthetic test only"; Duration=($duration*1000)
+            Tool="CPU-Stress"; Description="CPU performance test"
+            Status="SUCCESS"; Output="$iterations iterations in $duration seconds`nOps/sec: $opsPerSecond"; Duration=($duration*1000)
         }
-        Write-Host "CPU test: $opsPerSec ops/sec" -ForegroundColor Green
+        Write-Host "CPU test: $opsPerSecond ops/sec" -ForegroundColor Green
     } catch {
         Write-Host "CPU test failed" -ForegroundColor Red
     }
 }
 
-# Test: Memory (FIXED)
+# Test: Memory (WITH FIX)
 function Test-Memory {
     Write-Host "`n=== RAM Testing ===" -ForegroundColor Green
     try {
@@ -479,18 +435,24 @@ function Test-Storage {
 function Test-Processes {
     Write-Host "`n=== Process Analysis ===" -ForegroundColor Green
     Run-Tool -ToolName "pslist" -Args "-t" -Description "Process tree"
-    Run-Tool -ToolName "handle" -Args "-p explorer" -Description "Explorer handles"
+    Run-Tool -ToolName "listdlls" -Args "-u" -Description "Unsigned DLLs" -TimeoutSeconds 15
 }
 
 # Test: Security
 function Test-Security {
     Write-Host "`n=== Security Analysis ===" -ForegroundColor Green
-    Run-Tool -ToolName "autorunsc" -Args "-a -c" -Description "Autorun entries" -RequiresAdmin $true
+    if (-not $script:IsAdmin) {
+        Write-Host "Some security tests require admin" -ForegroundColor Yellow
+    }
+    Run-Tool -ToolName "autorunsc" -Args "-a * -c -s" -Description "Autorun entries" -TimeoutSeconds 30
+    Run-Tool -ToolName "streams" -Args "-s C:\" -Description "Alternate data streams" -TimeoutSeconds 20
 }
 
-# Test: Network
+# NEW ENHANCED: Test Network with Speed Testing
 function Test-Network {
     Write-Host "`n=== Network Analysis ===" -ForegroundColor Green
+    
+    # Basic connection count
     try {
         $connections = (netstat -an 2>&1 | Measure-Object).Count
         $script:TestResults += @{
@@ -500,6 +462,223 @@ function Test-Network {
         Write-Host "Network: $connections connections" -ForegroundColor Green
     } catch {
         Write-Host "Error getting network info" -ForegroundColor Red
+    }
+    
+    # Network adapter information
+    Write-Host "Gathering network adapter information..." -ForegroundColor Yellow
+    try {
+        $adapters = Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
+        $adapterInfo = @()
+        foreach ($adapter in $adapters) {
+            $adapterInfo += "Adapter: $($adapter.Name)"
+            $adapterInfo += "  Status: $($adapter.Status)"
+            $adapterInfo += "  Speed: $([math]::Round($adapter.LinkSpeed / 1000000, 0)) Mbps"
+            $adapterInfo += "  MAC: $($adapter.MacAddress)"
+            $adapterInfo += ""
+        }
+        $script:TestResults += @{
+            Tool="Network-Adapters"; Description="Active network adapters"
+            Status="SUCCESS"; Output=($adapterInfo -join "`n"); Duration=100
+        }
+        Write-Host "Network adapter info collected" -ForegroundColor Green
+    } catch {
+        Write-Host "Error getting adapter info" -ForegroundColor Yellow
+    }
+}
+
+# NEW: Network Speed Testing Function
+function Test-NetworkSpeed {
+    Write-Host "`n=== Network Speed Testing ===" -ForegroundColor Green
+    
+    # Test 1: Local Network Connectivity with Test-NetConnection
+    Write-Host "Testing local network connectivity..." -ForegroundColor Yellow
+    try {
+        # Test gateway
+        $gateway = (Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Select-Object -First 1).NextHop
+        if ($gateway) {
+            $gatewayTest = Test-NetConnection -ComputerName $gateway -InformationLevel Quiet -WarningAction SilentlyContinue
+            if ($gatewayTest) {
+                Write-Host "Gateway ($gateway) is reachable" -ForegroundColor Green
+                $script:TestResults += @{
+                    Tool="Gateway-Test"; Description="Local gateway connectivity"
+                    Status="SUCCESS"; Output="Gateway $gateway is reachable"; Duration=100
+                }
+            } else {
+                Write-Host "Gateway ($gateway) is not reachable" -ForegroundColor Red
+                $script:TestResults += @{
+                    Tool="Gateway-Test"; Description="Local gateway connectivity"
+                    Status="FAILED"; Output="Gateway $gateway is not reachable"; Duration=100
+                }
+            }
+        }
+    } catch {
+        Write-Host "Could not test gateway" -ForegroundColor Yellow
+    }
+    
+    # Test 2: Internet Connectivity Tests
+    Write-Host "Testing internet connectivity..." -ForegroundColor Yellow
+    $internetTargets = @(
+        @{Name="Google DNS"; Target="8.8.8.8"; Port=53},
+        @{Name="Cloudflare DNS"; Target="1.1.1.1"; Port=53},
+        @{Name="Google"; Target="google.com"; Port=443},
+        @{Name="Microsoft"; Target="microsoft.com"; Port=443}
+    )
+    
+    $connectivityResults = @()
+    foreach ($target in $internetTargets) {
+        try {
+            Write-Host "  Testing $($target.Name)..." -NoNewline
+            $result = Test-NetConnection -ComputerName $target.Target -Port $target.Port -InformationLevel Quiet -WarningAction SilentlyContinue
+            if ($result) {
+                Write-Host " OK" -ForegroundColor Green
+                $connectivityResults += "$($target.Name): Reachable"
+            } else {
+                Write-Host " Failed" -ForegroundColor Red
+                $connectivityResults += "$($target.Name): Unreachable"
+            }
+        } catch {
+            Write-Host " Error" -ForegroundColor Yellow
+            $connectivityResults += "$($target.Name): Error"
+        }
+    }
+    
+    $script:TestResults += @{
+        Tool="Internet-Connectivity"; Description="Internet endpoint tests"
+        Status="SUCCESS"; Output=($connectivityResults -join "`n"); Duration=500
+    }
+    
+    # Test 3: Latency Testing with Test-NetConnection
+    Write-Host "Testing network latency..." -ForegroundColor Yellow
+    $latencyTargets = @("8.8.8.8", "1.1.1.1", "google.com")
+    $latencyResults = @()
+    
+    foreach ($target in $latencyTargets) {
+        try {
+            Write-Host "  Pinging $target..." -NoNewline
+            $ping = Test-NetConnection -ComputerName $target -InformationLevel Detailed -WarningAction SilentlyContinue
+            if ($ping.PingSucceeded) {
+                $latency = $ping.PingReplyDetails.RoundtripTime
+                Write-Host " $latency ms" -ForegroundColor Green
+                $latencyResults += "$target: $latency ms"
+            } else {
+                Write-Host " Failed" -ForegroundColor Red
+                $latencyResults += "$target: Failed"
+            }
+        } catch {
+            Write-Host " Error" -ForegroundColor Yellow
+            $latencyResults += "$target: Error"
+        }
+    }
+    
+    $script:TestResults += @{
+        Tool="Network-Latency"; Description="Latency to common endpoints"
+        Status="SUCCESS"; Output=($latencyResults -join "`n"); Duration=300
+    }
+    
+    # Test 4: PSPing tests (if available)
+    $pspingPath = Join-Path $SysinternalsPath "psping.exe"
+    if (Test-Path $pspingPath) {
+        Write-Host "Running PSPing bandwidth tests..." -ForegroundColor Yellow
+        
+        # Latency test with PSPing
+        Write-Host "  PSPing latency test to Google DNS..." -ForegroundColor Yellow
+        try {
+            $pspingResult = & $pspingPath -n 10 -w 0 -q 8.8.8.8:53 2>&1
+            $pspingOutput = $pspingResult -join "`n"
+            
+            # Extract average latency from PSPing output
+            if ($pspingOutput -match "Average = ([\d.]+)ms") {
+                $avgLatency = $matches[1]
+                Write-Host "  Average latency: $avgLatency ms" -ForegroundColor Green
+                $script:TestResults += @{
+                    Tool="PSPing-Latency"; Description="PSPing latency test to 8.8.8.8"
+                    Status="SUCCESS"; Output="Average latency: $avgLatency ms`n`nFull output:`n$pspingOutput"; Duration=10000
+                }
+            } else {
+                $script:TestResults += @{
+                    Tool="PSPing-Latency"; Description="PSPing latency test"
+                    Status="SUCCESS"; Output=$pspingOutput; Duration=10000
+                }
+            }
+        } catch {
+            Write-Host "  PSPing latency test failed" -ForegroundColor Yellow
+            $script:TestResults += @{
+                Tool="PSPing-Latency"; Description="PSPing latency test"
+                Status="ERROR"; Output=$_.Exception.Message; Duration=0
+            }
+        }
+        
+        # Bandwidth test with PSPing (TCP)
+        Write-Host "  PSPing bandwidth test..." -ForegroundColor Yellow
+        Write-Host "  Note: This tests connection capacity, not actual throughput" -ForegroundColor DarkGray
+        try {
+            # Using port 80 for HTTP as it's commonly open
+            $bandwidthResult = & $pspingPath -b -l 8k -n 100 -h 10 google.com:80 2>&1
+            $bandwidthOutput = $bandwidthResult -join "`n"
+            
+            $script:TestResults += @{
+                Tool="PSPing-Bandwidth"; Description="PSPing bandwidth capacity test"
+                Status="SUCCESS"; Output=$bandwidthOutput; Duration=5000
+            }
+            
+            Write-Host "  Bandwidth test completed" -ForegroundColor Green
+        } catch {
+            Write-Host "  PSPing bandwidth test failed" -ForegroundColor Yellow
+            $script:TestResults += @{
+                Tool="PSPing-Bandwidth"; Description="PSPing bandwidth test"
+                Status="ERROR"; Output=$_.Exception.Message; Duration=0
+            }
+        }
+    } else {
+        Write-Host "PSPing not found - skipping advanced tests" -ForegroundColor Yellow
+        Write-Host "Download PSPing from Sysinternals for bandwidth testing" -ForegroundColor Yellow
+        $script:TestResults += @{
+            Tool="PSPing"; Description="PSPing tests"
+            Status="SKIPPED"; Output="PSPing.exe not found in Sysinternals folder"; Duration=0
+        }
+    }
+    
+    # Test 5: DNS Resolution Speed
+    Write-Host "Testing DNS resolution speed..." -ForegroundColor Yellow
+    $dnsTargets = @("google.com", "microsoft.com", "cloudflare.com", "github.com")
+    $dnsResults = @()
+    
+    foreach ($domain in $dnsTargets) {
+        try {
+            $start = Get-Date
+            $result = Resolve-DnsName -Name $domain -Type A -ErrorAction Stop
+            $duration = ((Get-Date) - $start).TotalMilliseconds
+            $dnsResults += "$domain: $([math]::Round($duration,1)) ms"
+            Write-Host "  $domain resolved in $([math]::Round($duration,1)) ms" -ForegroundColor Green
+        } catch {
+            $dnsResults += "$domain: Failed"
+            Write-Host "  $domain resolution failed" -ForegroundColor Red
+        }
+    }
+    
+    $script:TestResults += @{
+        Tool="DNS-Resolution"; Description="DNS resolution speed"
+        Status="SUCCESS"; Output=($dnsResults -join "`n"); Duration=200
+    }
+    
+    # Test 6: Network Path MTU Discovery
+    Write-Host "Checking network MTU..." -ForegroundColor Yellow
+    try {
+        $mtuTest = ping -f -l 1472 8.8.8.8 -n 1 2>&1
+        if ($mtuTest -match "Packet needs to be fragmented") {
+            Write-Host "  Standard MTU (1500) may be too large" -ForegroundColor Yellow
+            $mtuResult = "MTU may need adjustment - fragmentation detected"
+        } else {
+            Write-Host "  Standard MTU (1500) works" -ForegroundColor Green
+            $mtuResult = "Standard MTU (1500 bytes) is working"
+        }
+        
+        $script:TestResults += @{
+            Tool="MTU-Check"; Description="Network MTU verification"
+            Status="SUCCESS"; Output=$mtuResult; Duration=100
+        }
+    } catch {
+        Write-Host "  Could not test MTU" -ForegroundColor Yellow
     }
 }
 
@@ -518,132 +697,81 @@ function Test-OSHealth {
     Write-Host "Running DISM and SFC (may take 5-15 min)..." -ForegroundColor Yellow
     try {
         $start = Get-Date
-        $dism = (dism /Online /Cleanup-Image /ScanHealth) 2>&1 | Out-String
-        $sfc = (sfc /scannow) 2>&1 | Out-String
+        
+        # DISM
+        Write-Host "  Running DISM..." -ForegroundColor Yellow
+        $dismResult = DISM /Online /Cleanup-Image /CheckHealth 2>&1 | Out-String
+        
+        # SFC
+        Write-Host "  Running SFC..." -ForegroundColor Yellow
+        $sfcResult = sfc /scannow 2>&1 | Out-String
+        
         $duration = ((Get-Date) - $start).TotalMilliseconds
-
-        $summary = "DISM:`n" + (($dism -split "`n" | Where-Object {$_ -match "No component|repairable|error"} | Select-Object -First 3) -join "`n")
-        $summary += "`n`nSFC:`n" + (($sfc -split "`n" | Where-Object {$_ -match "did not find|found corrupt|Protection"} | Select-Object -First 3) -join "`n")
-
+        
         $script:TestResults += @{
-            Tool="OS-Health"; Description="DISM+SFC integrity"
-            Status="SUCCESS"; Output=$summary; Duration=$duration
+            Tool="OS-Health"; Description="DISM and SFC scan"
+            Status="SUCCESS"; Output="DISM:`n$dismResult`n`nSFC:`n$sfcResult"; Duration=$duration
         }
-        Write-Host "OS Health complete" -ForegroundColor Green
+        Write-Host "OS Health checks complete" -ForegroundColor Green
     } catch {
-        Write-Host "OS Health check failed" -ForegroundColor Red
+        Write-Host "OS Health checks failed" -ForegroundColor Red
     }
 }
 
-# Test: SMART
+# Test: Storage SMART
 function Test-StorageSMART {
     Write-Host "`n=== Storage SMART ===" -ForegroundColor Green
     try {
-        $lines = @()
-        try {
-            $pd = Get-PhysicalDisk -ErrorAction Stop
-            foreach ($p in $pd) {
-                $lines += "$($p.FriendlyName) | Health: $($p.HealthStatus) | Media: $($p.MediaType)"
-            }
-        } catch {}
-
-        if (-not $lines) { $lines = @("SMART data not available (driver limitation)") }
-
+        $smartData = Get-PhysicalDisk | Get-StorageReliabilityCounter -ErrorAction Stop
+        $info = @()
+        foreach ($disk in $smartData) {
+            $info += "Disk: $($disk.DeviceId)"
+            $info += "  Temperature: $($disk.Temperature)°C"
+            $info += "  Power On Hours: $($disk.PowerOnHours)"
+            $info += "  Wear: $($disk.Wear)%"
+            $info += ""
+        }
         $script:TestResults += @{
-            Tool="Storage-SMART"; Description="SMART data"
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=100
+            Tool="SMART"; Description="Disk SMART data"
+            Status="SUCCESS"; Output=($info -join "`n"); Duration=200
         }
         Write-Host "SMART data collected" -ForegroundColor Green
     } catch {
-        Write-Host "SMART check failed" -ForegroundColor Yellow
+        Write-Host "SMART data unavailable" -ForegroundColor Yellow
     }
 }
 
-# Test: TRIM
+# Test: TRIM Status
 function Test-Trim {
     Write-Host "`n=== SSD TRIM Status ===" -ForegroundColor Green
     try {
-        $q = (fsutil behavior query DisableDeleteNotify) 2>&1
-        $map = @{}
-        ($q -split "`n") | ForEach-Object {
-            if ($_ -match "NTFS DisableDeleteNotify\s*=\s*(\d)") { $map["NTFS"] = $matches[1] }
-        }
-        $txt = $map.GetEnumerator() | ForEach-Object {
-            $status = if ($_.Value -eq "0") { "Enabled" } else { "Disabled" }
-            "$($_.Key): $status"
-        }
-        if (-not $txt) { $txt = @("TRIM status unknown") }
-
+        $trimResult = fsutil behavior query DisableDeleteNotify 2>&1
         $script:TestResults += @{
-            Tool="SSD-TRIM"; Description="TRIM status"
-            Status="SUCCESS"; Output=($txt -join "`n"); Duration=50
+            Tool="TRIM"; Description="SSD TRIM status"
+            Status="SUCCESS"; Output=$trimResult; Duration=50
         }
-        Write-Host "TRIM status collected" -ForegroundColor Green
+        Write-Host "TRIM status checked" -ForegroundColor Green
     } catch {
-        Write-Host "TRIM check failed" -ForegroundColor Yellow
+        Write-Host "TRIM status unavailable" -ForegroundColor Yellow
     }
 }
 
-# Test: NIC
+# Test: Network Adapters
 function Test-NIC {
     Write-Host "`n=== Network Adapters ===" -ForegroundColor Green
     try {
-        $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object {$_.Status -eq "Up"}
-        $lines = foreach ($a in $adapters) {
-            "$($a.InterfaceAlias): $($a.LinkSpeed) | MAC: $($a.MacAddress)"
+        $nics = Get-NetAdapter -ErrorAction Stop
+        $info = @()
+        foreach ($nic in $nics) {
+            $info += "$($nic.Name): $($nic.Status) - $($nic.LinkSpeed)"
         }
-        if (-not $lines) { $lines = @("No active adapters") }
-
         $script:TestResults += @{
-            Tool="NIC-Info"; Description="Network adapters"
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=100
+            Tool="NIC"; Description="Network adapter details"
+            Status="SUCCESS"; Output=($info -join "`n"); Duration=100
         }
-        Write-Host "Network adapters collected" -ForegroundColor Green
+        Write-Host "NIC details collected" -ForegroundColor Green
     } catch {
-        Write-Host "Network adapter check failed" -ForegroundColor Yellow
-    }
-}
-
-# Test: GPU
-function Test-GPU {
-    Write-Host "`n=== GPU (dxdiag) ===" -ForegroundColor Green
-    $dxProcess = $null
-    try {
-        $dx = Join-Path $env:TEMP "dxdiag_$([guid]::NewGuid().ToString('N')).txt"
-        Write-Host "Running dxdiag (up to $script:DXDIAG_TIMEOUT sec)..." -ForegroundColor Yellow
-
-        $dxProcess = Start-Process -FilePath "dxdiag" -ArgumentList "/t",$dx -WindowStyle Hidden -PassThru
-
-        $elapsed = 0
-        while (!(Test-Path $dx) -and $elapsed -lt $script:DXDIAG_TIMEOUT) {
-            if ($dxProcess.HasExited) { break }
-            Start-Sleep -Milliseconds 500
-            $elapsed += 0.5
-        }
-
-        if (Test-Path $dx) {
-            Start-Sleep -Seconds 1
-            $raw = Get-Content $dx -Raw -ErrorAction Stop
-            Remove-Item $dx -ErrorAction SilentlyContinue
-
-            $keep = ($raw -split "`r?`n") | Where-Object {
-                $_ -match "Card name|Driver Version|DirectX Version"
-            } | Select-Object -First 10
-
-            $script:TestResults += @{
-                Tool="GPU-DirectX"; Description="dxdiag summary"
-                Status="SUCCESS"; Output=($keep -join "`n"); Duration=($elapsed*1000)
-            }
-            Write-Host "dxdiag complete" -ForegroundColor Green
-        } else {
-            throw "Timeout"
-        }
-    } catch {
-        Write-Host "dxdiag failed: $($_.Exception.Message)" -ForegroundColor Yellow
-    } finally {
-        if ($dxProcess -and !$dxProcess.HasExited) {
-            try { $dxProcess.Kill(); $dxProcess.WaitForExit(5000) } catch {}
-        }
+        Write-Host "NIC details unavailable" -ForegroundColor Yellow
     }
 }
 
@@ -651,127 +779,87 @@ function Test-GPU {
 function Test-Power {
     Write-Host "`n=== Power/Battery ===" -ForegroundColor Green
     try {
-        $lines = @()
-        try {
-            $bat = Get-CimInstance Win32_Battery -ErrorAction Stop
-            foreach ($b in $bat) {
-                $lines += "Battery: $($b.BatteryStatus) | Design: $($b.DesignCapacity)"
+        $battery = Get-CimInstance Win32_Battery -ErrorAction Stop
+        if ($battery) {
+            $info = @"
+Status: $($battery.BatteryStatus)
+Charge: $($battery.EstimatedChargeRemaining)%
+Runtime: $($battery.EstimatedRunTime) minutes
+"@
+            $script:TestResults += @{
+                Tool="Battery"; Description="Battery status"
+                Status="SUCCESS"; Output=$info; Duration=50
             }
-            if (-not $bat) { $lines += "No battery (desktop)" }
-        } catch { $lines += "No battery (desktop)" }
-
-        if ($script:IsAdmin) {
-            $report = Join-Path $ScriptRoot "energy-report.html"
-            Write-Host "Generating energy report ($script:ENERGY_DURATION sec)..." -ForegroundColor Yellow
-            powercfg /energy /output $report /duration $script:ENERGY_DURATION 2>&1 | Out-Null
-            if (Test-Path $report) {
-                $lines += "Energy report: $report"
-            }
+            Write-Host "Battery: $($battery.EstimatedChargeRemaining)%" -ForegroundColor Green
+        } else {
+            Write-Host "No battery detected (desktop)" -ForegroundColor Gray
         }
-
-        $script:TestResults += @{
-            Tool="Power-Energy"; Description="Power info"
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=($script:ENERGY_DURATION*1000)
-        }
-        Write-Host "Power check complete" -ForegroundColor Green
     } catch {
-        Write-Host "Power check failed" -ForegroundColor Yellow
+        Write-Host "Power info unavailable" -ForegroundColor Yellow
     }
 }
 
-# Test: WHEA
+# Test: Hardware Events
 function Test-HardwareEvents {
     Write-Host "`n=== Hardware Events (WHEA) ===" -ForegroundColor Green
     try {
-        $ev = Get-WinEvent -FilterHashtable @{
-            LogName='System'
-            ProviderName='Microsoft-Windows-WHEA-Logger'
-            StartTime=(Get-Date).AddDays(-7)
-        } -ErrorAction SilentlyContinue | Select-Object -First 10
-
-        if ($ev) {
-            $text = ($ev | ForEach-Object {
-                "[{0:yyyy-MM-dd}] ID {1}: {2}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName
-            }) -join "`n"
-        } else {
-            $text = "No WHEA errors in last 7 days (good)"
+        $events = Get-WinEvent -FilterHashtable @{LogName='System'; ID=17,18,19,20,47} -MaxEvents 10 -ErrorAction Stop
+        $info = @()
+        foreach ($event in $events) {
+            $info += "$($event.TimeCreated): $($event.Message.Split("`n")[0])"
         }
-
+        if ($info.Count -eq 0) {
+            $info = @("No recent hardware errors")
+        }
         $script:TestResults += @{
-            Tool="WHEA"; Description="Hardware events (7d)"
-            Status="SUCCESS"; Output=$text; Duration=100
+            Tool="WHEA"; Description="Hardware error events"
+            Status="SUCCESS"; Output=($info -join "`n"); Duration=200
         }
-        Write-Host "WHEA scan complete" -ForegroundColor Green
+        Write-Host "Hardware events checked" -ForegroundColor Green
     } catch {
-        Write-Host "WHEA check failed" -ForegroundColor Yellow
+        Write-Host "No hardware events found" -ForegroundColor Green
     }
 }
 
 # Test: Windows Update
 function Test-WindowsUpdate {
     Write-Host "`n=== Windows Update ===" -ForegroundColor Green
-    $updateSession = $null
     try {
-        $lines = @()
-        try {
-            $svc = Get-Service -Name wuauserv -ErrorAction Stop
-            $lines += "Service: $($svc.Status)"
-        } catch {
-            $lines += "Service: Unable to query"
+        $updates = Get-HotFix | Select-Object -Last 5
+        $info = @()
+        foreach ($update in $updates) {
+            $info += "$($update.HotFixID) - Installed: $($update.InstalledOn)"
         }
-
-        Write-Host "Checking for updates (may take 30-90 sec)..." -ForegroundColor Yellow
-        $updateSession = New-Object -ComObject Microsoft.Update.Session
-        $searcher = $updateSession.CreateUpdateSearcher()
-
-        try {
-            $result = $searcher.Search("IsInstalled=0")
-            $lines += "Pending: $($result.Updates.Count)"
-        } catch {
-            $lines += "Search failed: $($_.Exception.Message)"
-        }
-
         $script:TestResults += @{
-            Tool="Windows-Update"; Description="Update status"
-            Status="SUCCESS"; Output=($lines -join "`n"); Duration=1000
+            Tool="Updates"; Description="Recent Windows updates"
+            Status="SUCCESS"; Output=($info -join "`n"); Duration=100
         }
-        Write-Host "Windows Update check complete" -ForegroundColor Green
+        Write-Host "Update history collected" -ForegroundColor Green
     } catch {
-        Write-Host "Windows Update check failed" -ForegroundColor Yellow
-    } finally {
-        if ($updateSession) {
-            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null } catch {}
-        }
-        [System.GC]::Collect()
+        Write-Host "Update info unavailable" -ForegroundColor Yellow
     }
 }
 
-# Generate Dual Reports (Clean + Detailed)
+# Generate Report
 function Generate-Report {
-    Write-Host "`nGenerating reports..." -ForegroundColor Cyan
-
-    # Test write access
-    $testFile = Join-Path $ScriptRoot "writetest_$([guid]::NewGuid().ToString('N')).tmp"
-    try {
-        "test" | Out-File -FilePath $testFile -ErrorAction Stop
-        Remove-Item $testFile -ErrorAction Stop
-    } catch {
-        Write-Host "ERROR: Cannot write to $ScriptRoot" -ForegroundColor Red
+    Write-Host "`n=== Generating Report ===" -ForegroundColor Green
+    
+    if ($TestResults.Count -eq 0) {
+        Write-Host "No test results to report" -ForegroundColor Yellow
         return
     }
 
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $cleanPath = Join-Path $ScriptRoot "SystemTest_Clean_$timestamp.txt"
-    $detailedPath = Join-Path $ScriptRoot "SystemTest_Detailed_$timestamp.txt"
+    $cleanPath = Join-Path $ScriptRoot "SystemReport_Clean_$timestamp.txt"
+    $detailedPath = Join-Path $ScriptRoot "SystemReport_Detailed_$timestamp.txt"
 
-    # Calculate stats
-    $success = ($TestResults | Where-Object {$_.Status -eq "SUCCESS"}).Count
-    $failed = ($TestResults | Where-Object {$_.Status -eq "FAILED"}).Count
-    $skipped = ($TestResults | Where-Object {$_.Status -eq "SKIPPED"}).Count
+    # Stats
     $total = $TestResults.Count
-    $successRate = if ($total -gt 0) { [math]::Round(($success/$total)*100,1) } else { 0 }
+    $success = ($TestResults | Where-Object { $_.Status -eq "SUCCESS" }).Count
+    $failed = ($TestResults | Where-Object { $_.Status -in @("ERROR","TIMEOUT","FAILED") }).Count
+    $skipped = ($TestResults | Where-Object { $_.Status -eq "SKIPPED" }).Count
 
-    # === CLEAN REPORT ===
+    # Clean Report
     $cleanReport = @()
     $cleanReport += "========================================="
     $cleanReport += "  SYSTEM TEST REPORT v$script:VERSION"
@@ -779,67 +867,49 @@ function Generate-Report {
     $cleanReport += "========================================="
     $cleanReport += "Date: $(Get-Date)"
     $cleanReport += "Computer: $env:COMPUTERNAME"
-    $cleanReport += "Admin: $(if ($script:IsAdmin) {'YES'} else {'NO'})"
+    $cleanReport += "User: $env:USERNAME"
     $cleanReport += ""
-
-    $cleanReport += "SUMMARY:"
+    $cleanReport += "TEST SUMMARY:"
     $cleanReport += "  Total Tests: $total"
-    $cleanReport += "  Success: $success"
+    $cleanReport += "  Successful: $success"
     $cleanReport += "  Failed: $failed"
     $cleanReport += "  Skipped: $skipped"
-    $cleanReport += "  Success Rate: $successRate%"
+    $cleanReport += "  Success Rate: $([math]::Round(($success/$total)*100,1))%"
     $cleanReport += ""
-
     $cleanReport += "KEY FINDINGS:"
-    $cleanReport += "-------------"
     
-    # Extract key info from results
-    $sysInfo = $TestResults | Where-Object {$_.Tool -eq "System-Overview"}
-    if ($sysInfo) {
-        $cleanReport += ""
-        $cleanReport += "SYSTEM:"
-        $sysInfo.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
+    # Extract key metrics
+    $cpuTest = $TestResults | Where-Object { $_.Tool -eq "CPU-Info" } | Select-Object -First 1
+    if ($cpuTest) {
+        $cleanReport += $cpuTest.Output
     }
-
-    $ramInfo = $TestResults | Where-Object {$_.Tool -eq "RAM-Details"}
-    if ($ramInfo -and $ramInfo.Output -match "Usage: ([\d\.]+)%") {
-        $cleanReport += ""
-        $cleanReport += "MEMORY:"
-        $ramInfo.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
-    }
-
-    $diskPerf = $TestResults | Where-Object {$_.Tool -eq "Disk-Performance"}
-    if ($diskPerf) {
-        $cleanReport += ""
-        $cleanReport += "DISK PERFORMANCE:"
-        $diskPerf.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
-    }
-
-    $cleanReport += ""
-    $cleanReport += "RECOMMENDATIONS:"
-    $cleanReport += "----------------"
     
-    # Generate recommendations
-    if ($ramInfo -and $ramInfo.Output -match "Usage: ([\d\.]+)%") {
-        $usage = [float]$matches[1]
-        if ($usage -gt 85) {
-            $cleanReport += "• HIGH MEMORY USAGE ($usage%) - Consider adding more RAM"
-        } elseif ($usage -lt 30) {
-            $cleanReport += "• LOW MEMORY USAGE ($usage%) - Plenty of RAM available"
+    $ramTest = $TestResults | Where-Object { $_.Tool -eq "RAM-Details" } | Select-Object -First 1
+    if ($ramTest) {
+        $cleanReport += "`nRAM:"
+        $cleanReport += $ramTest.Output
+    }
+    
+    $storageTest = $TestResults | Where-Object { $_.Tool -eq "Storage-Overview" } | Select-Object -First 1
+    if ($storageTest) {
+        $cleanReport += "`nSTORAGE:"
+        $cleanReport += $storageTest.Output
+    }
+    
+    $networkTests = $TestResults | Where-Object { $_.Tool -like "*Network*" -or $_.Tool -like "*Latency*" }
+    if ($networkTests) {
+        $cleanReport += "`nNETWORK:"
+        foreach ($test in $networkTests) {
+            $cleanReport += "  $($test.Description):"
+            $cleanReport += "    $($test.Output -split "`n" | Select-Object -First 3 | ForEach-Object { $_.Trim() } | Where-Object { $_ })"
         }
     }
-
-    if ($failed -eq 0 -and $skipped -eq 0) {
-        $cleanReport += "• All tests passed successfully"
-    } elseif ($skipped -gt 0) {
-        $cleanReport += "• $skipped tests skipped (likely need admin privileges)"
-    }
-
+    
     $cleanReport += ""
-    $cleanReport += "For detailed output, see: $detailedPath"
-    $cleanReport += ""
+    $cleanReport += "========================================="
+    $cleanReport += "Report generated by Sysinternals Tester v$script:VERSION"
 
-    # === DETAILED REPORT ===
+    # Detailed Report
     $detailedReport = @()
     $detailedReport += "========================================="
     $detailedReport += "  SYSTEM TEST REPORT v$script:VERSION"
@@ -912,16 +982,16 @@ function Show-Menu {
     Write-Host ""
     Write-Host "1.  System Information"
     Write-Host "2.  CPU Testing"
-    Write-Host "3.  RAM Testing"
+    Write-Host "3.  RAM Testing (Fixed)"
     Write-Host "4.  Storage Testing"
     Write-Host "5.  Process Analysis"
     Write-Host "6.  Security Analysis $(if (-not $script:IsAdmin) {'[Admin]'})"
     Write-Host "7.  Network Analysis"
-    Write-Host "8.  OS Health (DISM/SFC) $(if (-not $script:IsAdmin) {'[Admin]'})"
-    Write-Host "9.  Storage SMART"
-    Write-Host "10. SSD TRIM Status"
-    Write-Host "11. Network Adapters"
-    Write-Host "12. GPU (dxdiag)"
+    Write-Host "8.  Network Speed Tests (NEW)" -ForegroundColor Cyan
+    Write-Host "9.  OS Health (DISM/SFC) $(if (-not $script:IsAdmin) {'[Admin]'})"
+    Write-Host "10. Storage SMART"
+    Write-Host "11. SSD TRIM Status"
+    Write-Host "12. Network Adapters"
     Write-Host "13. Power/Battery"
     Write-Host "14. Hardware Events (WHEA)"
     Write-Host "15. Windows Update"
@@ -945,19 +1015,19 @@ function Start-Menu {
             "5"  { Test-Processes; Read-Host "`nPress Enter" }
             "6"  { Test-Security; Read-Host "`nPress Enter" }
             "7"  { Test-Network; Read-Host "`nPress Enter" }
-            "8"  { Test-OSHealth; Read-Host "`nPress Enter" }
-            "9"  { Test-StorageSMART; Read-Host "`nPress Enter" }
-            "10" { Test-Trim; Read-Host "`nPress Enter" }
-            "11" { Test-NIC; Read-Host "`nPress Enter" }
-            "12" { Test-GPU; Read-Host "`nPress Enter" }
+            "8"  { Test-NetworkSpeed; Read-Host "`nPress Enter" }
+            "9"  { Test-OSHealth; Read-Host "`nPress Enter" }
+            "10" { Test-StorageSMART; Read-Host "`nPress Enter" }
+            "11" { Test-Trim; Read-Host "`nPress Enter" }
+            "12" { Test-NIC; Read-Host "`nPress Enter" }
             "13" { Test-Power; Read-Host "`nPress Enter" }
             "14" { Test-HardwareEvents; Read-Host "`nPress Enter" }
             "15" { Test-WindowsUpdate; Read-Host "`nPress Enter" }
             "16" {
                 Write-Host "`nRunning all tests..." -ForegroundColor Yellow
                 Test-SystemInfo; Test-CPU; Test-Memory; Test-Storage
-                Test-Processes; Test-Security; Test-Network; Test-OSHealth
-                Test-StorageSMART; Test-Trim; Test-NIC; Test-GPU
+                Test-Processes; Test-Security; Test-Network; Test-NetworkSpeed
+                Test-OSHealth; Test-StorageSMART; Test-Trim; Test-NIC
                 Test-Power; Test-HardwareEvents; Test-WindowsUpdate
                 Write-Host "`nAll tests complete!" -ForegroundColor Green
                 Read-Host "Press Enter"
@@ -971,41 +1041,43 @@ function Start-Menu {
     } while ($choice -ne "Q" -and $choice -ne "q")
 }
 
-# Main
-try {
-    Write-Host "Starting Sysinternals Tester v$script:VERSION..." -ForegroundColor Green
+# Main - only execute if script is run directly (not dot-sourced)
+if ($MyInvocation.InvocationName -ne '.') {
+    try {
+        Write-Host "Starting Sysinternals Tester v$script:VERSION..." -ForegroundColor Green
 
-    if (!(Initialize-Environment)) {
-        Write-Host "`nSetup required." -ForegroundColor Red
+        if (!(Initialize-Environment)) {
+            Write-Host "`nSetup required." -ForegroundColor Red
+            Read-Host "Press Enter to exit"
+            exit 1
+        }
+
+        if ($AutoRun) {
+            Write-Host "`nAuto-running all tests..." -ForegroundColor Yellow
+            if (-not $script:IsAdmin) {
+                Write-Host "WARNING: Running without admin - some tests will be skipped" -ForegroundColor Yellow
+                Start-Sleep -Seconds 2
+            }
+            Test-SystemInfo; Test-CPU; Test-Memory; Test-Storage
+            Test-Processes; Test-Security; Test-Network; Test-NetworkSpeed
+            Test-OSHealth; Test-StorageSMART; Test-Trim; Test-NIC
+            Test-Power; Test-HardwareEvents; Test-WindowsUpdate
+            Generate-Report
+            Write-Host "`nAuto-run complete!" -ForegroundColor Green
+            Read-Host "Press Enter to exit"
+        } else {
+            Start-Menu
+        }
+
+        Write-Host "`nSession complete!" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "`nERROR: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Line: $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Yellow
         Read-Host "Press Enter to exit"
         exit 1
     }
-
-    if ($AutoRun) {
-        Write-Host "`nAuto-running all tests..." -ForegroundColor Yellow
-        if (-not $script:IsAdmin) {
-            Write-Host "WARNING: Running without admin - some tests will be skipped" -ForegroundColor Yellow
-            Start-Sleep -Seconds 2
-        }
-        Test-SystemInfo; Test-CPU; Test-Memory; Test-Storage
-        Test-Processes; Test-Security; Test-Network; Test-OSHealth
-        Test-StorageSMART; Test-Trim; Test-NIC; Test-GPU
-        Test-Power; Test-HardwareEvents; Test-WindowsUpdate
-        Generate-Report
-        Write-Host "`nAuto-run complete!" -ForegroundColor Green
-        Read-Host "Press Enter to exit"
-    } else {
-        Start-Menu
+    finally {
+        Write-Host "Thank you for using Sysinternals Tester v$script:VERSION!" -ForegroundColor Cyan
     }
-
-    Write-Host "`nSession complete!" -ForegroundColor Green
-}
-catch {
-    Write-Host "`nERROR: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "Line: $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Yellow
-    Read-Host "Press Enter to exit"
-    exit 1
-}
-finally {
-    Write-Host "Thank you for using Sysinternals Tester v$script:VERSION!" -ForegroundColor Cyan
 }
