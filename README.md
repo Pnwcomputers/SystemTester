@@ -117,7 +117,7 @@ If Sysinternals tools are missing:
 | 4 | **Storage Testing** | Drives, fragmentation, performance, SMART data | `du`, `contig`, `streams`, read/write tests |
 | 5 | **Process Analysis** | Running processes, handles, process tree | `pslist`, `handle` |
 | 6 | **Security Analysis** | Autorun entries, startup items | `autorunsc` |
-| 7 | **FULL Network Analysis** | Active connections, adapter info | `netstat`, `Get-NetAdapter` |
+| 7 | **FULL Network Analysis** | Active connections, adapter info | `netstat`, `Get-NetAdapter`, `psping`,`Test-NetConncetion` |
 | 8 | **OS Health** | System file integrity, component store | `DISM`, `SFC` |
 | 9 | **Storage SMART** | Drive health, reliability counters | `Get-PhysicalDisk`, WMI SMART |
 | 10 | **SSD TRIM** | TRIM enablement status | `fsutil` |
