@@ -1,69 +1,56 @@
 # 🧰 Portable Sysinternals System Tester v2.2
 
-**Thumb-drive friendly, **Windows hardware health check toolkit** using Sysinternals applications
+**Thumb-drive friendly, no-install Windows hardware health check toolkit** powered by **Sysinternals** and **PowerShell**.
 
-A no-install **PowerShell solution** that runs a curated set of Sysinternals and Windows hardware diagnostics tools, then produces a **Clean Summary Report** (human-readable, de-noised) and a **Detailed Report** (cleaned tool outputs). Perfect for field diagnostics, baseline health checks, and handoff reports to clients.
+A zero-dependency **PowerShell solution** that runs a comprehensive, curated set of Sysinternals and Windows diagnostic tools. It then processes the raw data to produce two essential reports: a **Clean Summary Report** (human-readable, de-noised, with recommendations) and a **Detailed Report** (cleaned tool outputs).
 
-## 🚀 New Features Added
-### 1. Network Speed Testing (New Menu Option 8)
-A comprehensive network speed testing function that includes:
-- Local Network Connectivity Testing
-- Gateway reachability test using Test-NetConnection
-- Automatic detection of default gateway
-
-### 2. Internet Connectivity Tests
-- Tests connectivity to multiple endpoints (Google DNS, Cloudflare DNS, Google.com, Microsoft.com)
-- Port-specific testing (DNS port 53, HTTPS port 443)
-
-### 3. Latency Testing
-- Ping tests to multiple targets (8.8.8.8, 1.1.1.1, google.com)
-- Detailed round-trip time measurements using Test-NetConnection
-
-### 4. PSPing Integration (if available in Sysinternals folder)
-- Advanced latency testing with 10 iterations
-- TCP bandwidth capacity testing
-- Connection quality analysis
-
-### 5. DNS Resolution Speed Testing
-- Tests DNS lookup speed for multiple domains
-- Measures resolution time in milliseconds
-
-### 6. Network MTU Discovery
-- Checks if standard MTU (1500 bytes) works without fragmentation
-- Helps identify potential network configuration issues
-
-## 📋 Key Enhancements
-1. Version bumped to 2.3 to reflect the new features
-2. Added "psping" to the tool verification list
-3. Network Speed Tests appear as menu option 8 (highlighted in cyan as NEW)
-4. All network tests integrate seamlessly with the existing reporting system
-5. Both clean and detailed reports will include network speed test results
+**The essential utility for:**
+* Field diagnostics and client handoff reports.
+* Establishing a system baseline health check.
+* Quickly identifying performance bottlenecks.
 
 ---
 
-## ✨ Key Features
+## 🚀 NEW in v2.2: Advanced Network Speed & Latency Testing
 
-- 🖱️ **One-click Menu or Autorun** — Interactive menu or `-AutoRun` parameter for unattended scans.
-- 🧹 **Output Cleaner** — Removes banners, EULA text, and usage blocks for readable reports.
-- 🧠 **Comprehensive Tests** — CPU, RAM, Disk, GPU, Network, OS Health, and Windows Update status.
-- 🗂️ **Smart Reporting** — Timestamped Summary + Detailed TXT reports with actionable recommendations.
-- 📦 **Fully Portable** — Run from USB; no installation required.
-- 🧰 **Graceful Degradation** — Missing tools detected and skipped automatically with helpful messages.
-- 🔐 **Robust Elevation Handling** — SID-based admin check (Windows Home compatible).
-- 📥 **Auto-Download Tools** — Built-in Sysinternals Suite downloader (no manual setup needed!).
-- 🔄 **Windows Update Integration** — Checks pending updates, history, and service status.
-- ⚡ **Modern PowerShell** — Uses **CIM instances** (not deprecated WMI) for better performance.
-- 🔍 **Tool Integrity Verification** — Validates digital signatures and file integrity.
+Version 2.2 introduces a complete **Network Speed Test Suite** (Menu Option 8) for in-depth connectivity and performance analysis, integrated directly into the clean reporting system.
+
+### Key New Capabilities:
+
+| Feature | Description |
+| :--- | :--- |
+| **Local Connectivity** | Tests local network, default gateway reachability (`Test-NetConnection`). |
+| **Internet Reachability** | Connectivity tests to multiple endpoints (Google DNS, Cloudflare DNS, Google.com, Microsoft.com). Includes port-specific testing (DNS 53, HTTPS 443). |
+| **Latency Testing** | Detailed ping tests to multiple targets with round-trip time measurements. |
+| **PSPing Integration** | Advanced latency and TCP bandwidth capacity testing for connection quality analysis (requires `psping.exe` in Sysinternals folder). |
+| **DNS Resolution Speed** | Measures DNS lookup speed for multiple domains in milliseconds. |
+| **Network MTU Discovery** | Checks for standard MTU (1500 bytes) without fragmentation to help identify network configuration issues. |
+
+---
+
+## ✨ Core Features
+
+| Icon | Feature | Description |
+| :---: | :--- | :--- |
+| 🖱️ | **One-Click Menu or AutoRun** | Use the interactive menu or the `-AutoRun` parameter for unattended, complete system scans. |
+| 📦 | **Fully Portable** | Run entirely from a USB drive with no installation required. |
+| 📥 | **Auto-Download Tools** | Built-in functionality to download the latest Sysinternals Suite directly from Microsoft (no manual setup!). |
+| 🧹 | **Smart Reporting & Cleaning** | Generates timestamped **Clean Summary** and **Detailed TXT** reports. Output cleaner removes EULA, banners, and usage blocks for professional reports. |
+| 🧠 | **Comprehensive Tests** | Covers CPU, RAM, Disk, GPU, **Network**, OS Health, and Windows Update status (15+ categories). |
+| ⚡ | **Modern PowerShell** | Uses **CIM instances** (not deprecated WMI) for better performance and future compatibility. |
+| 🔐 | **Robust Elevation** | SID-based admin check (works on Windows Home) and graceful degradation for missing tools. |
+| 🔍 | **Integrity Verified** | Validates digital signatures and file integrity for all Sysinternals tools. |
+| 🔄 | **Windows Update Check** | Integrates to check pending updates, history, and service status. |
 
 ---
 
 ## 🧩 Requirements
 
-- **OS**: Windows 10/11 (Windows Server supported)
-- **PowerShell**: 5.1+ or PowerShell 7
-- **Permissions**: **Administrator rights recommended** (some tests require elevation)
-- **Internet**: Only needed for the auto-download feature (optional)
-- **Sysinternals Tools**: Auto-downloadable via launcher or manual installation
+* **OS**: Windows 10/11 (Windows Server supported)
+* **PowerShell**: 5.1+ or PowerShell 7
+* **Permissions**: **Administrator rights recommended** (some key tests require elevation).
+* **Internet**: Only needed for the optional auto-download feature.
+* **Tools**: Sysinternals Tools (auto-downloadable via launcher).
 
 ---
 
@@ -130,7 +117,7 @@ If Sysinternals tools are missing:
 | 4 | **Storage Testing** | Drives, fragmentation, performance, SMART data | `du`, `contig`, `streams`, read/write tests |
 | 5 | **Process Analysis** | Running processes, handles, process tree | `pslist`, `handle` |
 | 6 | **Security Analysis** | Autorun entries, startup items | `autorunsc` |
-| 7 | **Network Analysis** | Active connections, adapter info | `netstat`, `Get-NetAdapter` |
+| 7 | **FULL Network Analysis** | Active connections, adapter info | `netstat`, `Get-NetAdapter` |
 | 8 | **OS Health** | System file integrity, component store | `DISM`, `SFC` |
 | 9 | **Storage SMART** | Drive health, reliability counters | `Get-PhysicalDisk`, WMI SMART |
 | 10 | **SSD TRIM** | TRIM enablement status | `fsutil` |
@@ -173,7 +160,7 @@ CPU PERFORMANCE:
   
 MEMORY:
   Total RAM: 16 GB
-  Usage: 62.3%
+  Usage: 62.2%
   
 DISK PERFORMANCE:
   Write Speed: 487.3 MB/s
@@ -236,37 +223,33 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 
 ---
 
-## 📋 What's New in Version 2.1
+## 📋 What's New in Version 2.2
 
-### ✅ Implemented Features
-* Tool Integrity Verification — Digital signature validation for all Sysinternals tools.
-* File Size Validation — Detects corrupted or incomplete downloads.
-* Enhanced Path Handling — Fixed compatibility issues when dot-sourcing or running from various paths.
-* Improved Error Messages — More helpful guidance when tools are missing or corrupted.
+### Key New Capabilities:
 
-### 🔄 Architecture Improvements
-* Fixed $PSScriptRoot handling for consistent path resolution.
-* Corrected tool extension handling in verification routines.
-* Enhanced debugging output for troubleshooting.
-* Improved validation logic for tool detection.
+| Feature | Description |
+| :--- | :--- |
+| **Local Connectivity** | Tests local network, default gateway reachability (`Test-NetConnection`). |
+| **Internet Reachability** | Connectivity tests to multiple endpoints (Google DNS, Cloudflare DNS, Google.com, Microsoft.com). Includes port-specific testing (DNS 53, HTTPS 443). |
+| **Latency Testing** | Detailed ping tests to multiple targets with round-trip time measurements. |
+| **PSPing Integration** | Advanced latency and TCP bandwidth capacity testing for connection quality analysis (requires `psping.exe` in Sysinternals folder). |
+| **DNS Resolution Speed** | Measures DNS lookup speed for multiple domains in milliseconds. |
+| **Network MTU Discovery** | Checks for standard MTU (1500 bytes) without fragmentation to help identify network configuration issues. |
 
 ---
 
 ## 🗺️ Roadmap
 
 ### Version 2.2
+* Configuration file support (JSON) for test customization
 * Report history viewer in launcher
+* Old report cleanup functionality
+* Tunable summary verbosity levels
+* Advanced GPU diagnostics (if GPU-Z or similar available)
 * Baseline comparison mode (compare current vs. previous tests)
 * Skip flags (`-SkipCPU`, `-SkipNetwork`, etc.)
 * CSV export for data analysis
 * HTML report export with charts and graphs
-
-### Version 2.3
-* Configuration file support (JSON) for test customization
-* Old report cleanup functionality
-* Tunable summary verbosity levels
-* Network throughput testing
-* Advanced GPU diagnostics (if GPU-Z or similar available)
 
 ### Version 3.0 (Long-term)
 * WPF/WinUI graphical interface option
