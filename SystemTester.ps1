@@ -830,6 +830,17 @@ function Generate-Report {
             $criticalIssues++
         }
     }
+	
+	# --- D.5. Windows Update Alert ---
+    $updateTest = $script:TestResults | Where-Object {$_.Tool -eq "Windows-Update"} | Select-Object -First 1
+    if ($updateTest -and $updateTest.Output -match "Pending:\s*(\d+)") {
+        $pendingCount = [int]$matches[1]
+        if ($pendingCount -gt 0) {
+            $recommendations += "• CRITICAL: $pendingCount Windows Update(s) are pending."
+            $recommendations += "  → Install all pending updates to ensure system stability and security."
+            $criticalIssues++
+        }
+    }
     
     # --- E. Failed Tests Alert ---
     if ($failed -gt 0) {
