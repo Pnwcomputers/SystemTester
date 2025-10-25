@@ -95,7 +95,6 @@ function Test-ToolIntegrity {
 
 # Verify all tools
 function Test-ToolVerification {
-    # ... (code unchanged)
     Write-Host "`n========================================" -ForegroundColor Cyan
     Write-Host "  TOOL INTEGRITY VERIFICATION" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
@@ -107,7 +106,95 @@ function Test-ToolVerification {
     "testlimit","diskext","listdlls","psping"
     )
     
-    # ... (rest of verification logic)
+    $stats = @{
+        VALID_MS=0; VALID_OTHER=0; NOT_SIGNED=0
+        BAD_SIZE=0; BAD_SIGNATURE=0; MISSING=0; CHECK_FAILED=0
+    }
+    
+    $verificationOutput = @() # Array to hold clean output for the report
+    $start = Get-Date
+
+    foreach ($tool in $allTools) {
+        $result = Test-ToolIntegrity -ToolName $tool
+        $stats[$result.Status]++
+        
+        $color = switch ($result.Status) {
+            "VALID_MS" { "Green" }
+            "VALID_OTHER" { "Cyan" }
+            "NOT_SIGNED" { "Yellow" }
+            "MISSING" { "Red" }
+            "BAD_SIZE" { "Red" }
+            "BAD_SIGNATURE" { "Red" }
+            "CHECK_FAILED" { "Yellow" }
+        }
+        
+        $statusText = switch ($result.Status) {
+            "VALID_MS" { "[OK-MS]" }
+            "VALID_OTHER" { "[OK-OTHER]" }
+            "NOT_SIGNED" { "[NO-SIG]" }
+            "MISSING" { "[MISSING]" }
+            "BAD_SIZE" { "[BAD-SIZE]" }
+            "BAD_SIGNATURE" { "[BAD-SIG]" }
+            "CHECK_FAILED" { "[ERROR]" }
+        }
+        
+        # Display the result (as before)
+        Write-Host "$statusText $tool" -ForegroundColor $color
+        
+        # Record the clean output line
+        $verificationOutput += "$statusText $tool"
+        
+        if ($result.Details -and $result.Status -ne "VALID_MS") {
+            Write-Host "         $($result.Details)" -ForegroundColor DarkGray
+            $verificationOutput += "         $($result.Details)"
+        }
+    }
+    
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "SUMMARY:" -ForegroundColor White
+    
+    # Store the full summary in a dedicated output variable
+    $summaryOutput = @()
+    $summaryOutput += "SUMMARY:"
+    $summaryOutput += "  Total Tools: $($allTools.Count)"
+    $summaryOutput += "  Valid (Microsoft): $($stats.VALID_MS)"
+    $summaryOutput += "  Valid (Other): $($stats.VALID_OTHER)"
+    $summaryOutput += "  Not Signed: $($stats.NOT_SIGNED)"
+    $summaryOutput += "  Issues: $($stats.BAD_SIZE + $stats.BAD_SIGNATURE + $stats.MISSING + $stats.CHECK_FAILED)"
+
+    # Display the summary stats (as before)
+    $summaryOutput | ForEach-Object {
+        if ($_ -match "Total Tools" -or $_ -match "Valid") { Write-Host $_ -ForegroundColor White }
+        if ($_ -match "Issues") { Write-Host $_ -ForegroundColor Red }
+        if ($_ -match "Not Signed") { Write-Host $_ -ForegroundColor Yellow }
+    }
+    
+    $totalIssues = $stats.BAD_SIZE + $stats.BAD_SIGNATURE + $stats.MISSING + $stats.CHECK_FAILED
+    $statusLine = if ($totalIssues -eq 0 -and $stats.VALID_MS -gt 0) {
+        "STATUS: All present tools are verified and safe to use"
+    } elseif ($totalIssues -gt 0) {
+        "STATUS: $totalIssues issue(s) detected - recommend re-download"
+    } else {
+        "STATUS: Check incomplete or no tools found"
+    }
+
+    Write-Host ""
+    Write-Host $statusLine -ForegroundColor Green
+    Write-Host ""
+
+    $duration = ((Get-Date) - $start).TotalMilliseconds
+
+    # *** NEW CRITICAL BLOCK: Store the results in $script:TestResults ***
+    $script:TestResults += @{
+        Tool="Tool-Verification"; 
+        Description="Sysinternals Tool Integrity Check";
+        Status=($statusLine -split ":")[0];
+        Output=($verificationOutput -join "`n");
+        Summary=($summaryOutput -join "`n");
+        Duration=$duration
+    }
+    # *******************************************************************
 }
 
 # Initialize environment
