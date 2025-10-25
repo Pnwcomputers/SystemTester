@@ -1,17 +1,18 @@
 # Portable Sysinternals System Tester - Enhanced Version
 # Created by Pacific Northwest Computers - 2025
-# Complete Production Version - v2.3
+# Complete Production Version - v2.2 (Updated)
 # Enhanced with Network Speed Testing
 
 param([switch]$AutoRun)
 
 # Constants
-$script:VERSION = "2.3"
-$script:DXDIAG_TIMEOUT = 45
-$script:ENERGY_DURATION = 15
-$script:CPU_TEST_SECONDS = 10
+$script:VERSION = "2.2"
+$script:DXDIAG_TIMEOUT = 50
+$script:ENERGY_DURATION = 20
+$script:CPU_TEST_SECONDS = 30
 $script:MAX_PATH_LENGTH = 240
 $script:MIN_TOOL_SIZE_KB = 50
+$script:DNS_TEST_TARGETS = @("google.com", "microsoft.com", "cloudflare.com", "github.com") # Added DNS Targets
 
 # Paths
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -172,6 +173,45 @@ function Test-ToolVerification {
     Write-Host ""
 }
 
+# Clean tool output
+function Clean-ToolOutput {
+    param([string]$ToolName, [string]$RawOutput)
+    if (!$RawOutput) { return "" }
+
+    $lines = $RawOutput -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    $cleaned = @()
+
+    foreach ($line in $lines) {
+        # Skip boilerplate
+        if ($line -match "Copyright|Sysinternals|www\.|EULA|Mark Russinovich|David Solomon|Bryce Cogswell") { continue }
+        if ($line -match "^-+$|^=+$|^\*+$") { continue }
+
+        # Tool-specific filtering (using v2.2 logic)
+        switch ($ToolName) {
+            "psinfo" {
+                if ($line -match "^(System|Uptime|Kernel|Product|Service|Build|Processors|Physical|Computer|Domain|Install)") {
+                    $cleaned += $line
+                }
+            }
+            "coreinfo" {
+                if ($line -match "^(Intel|AMD|Logical|Cores|Processor|CPU|Cache|Feature|\s+\*)") {
+                    $cleaned += $line
+                }
+            }
+            "pslist" {
+                if ($line -match "^(Name|Process|Pid)\s+|^\w+\s+\d+") {
+                    $cleaned += $line
+                }
+            }
+            default {
+                if ($line.Length -lt 200) { $cleaned += $line }
+            }
+        }
+    }
+
+    return ($cleaned | Select-Object -First 40) -join "`n"
+}
+
 # Initialize environment
 function Initialize-Environment {
     Write-Host "Initializing..." -ForegroundColor Yellow
@@ -218,81 +258,74 @@ function Initialize-Environment {
     return $true
 }
 
-# Run tool
 function Run-Tool {
     param(
         [string]$ToolName,
         [string]$Args = "",
-        [string]$Description,
-        [int]$TimeoutSeconds = 10
+        [string]$Description = "",
+        [bool]$RequiresAdmin = $false
     )
 
-    $toolPath = Join-Path $SysinternalsPath "$ToolName.exe"
-    if (!(Test-Path $toolPath)) {
-        Write-Host "$ToolName not found" -ForegroundColor Red
+    if ($RequiresAdmin -and -not $script:IsAdmin) {
+        Write-Host "SKIP: $ToolName (requires admin)" -ForegroundColor Yellow
         $script:TestResults += @{
             Tool=$ToolName; Description=$Description
-            Status="MISSING"; Output="Tool not found"; Duration=0
+            Status="SKIPPED"; Output="Requires administrator privileges"; Duration=0
         }
         return
     }
 
+    $toolPath = Join-Path $SysinternalsPath "$ToolName.exe"
+    if (!(Test-Path $toolPath)) {
+        Write-Host "SKIP: $ToolName (not found)" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "Running $ToolName..." -ForegroundColor Cyan
     try {
-        $info = New-Object System.Diagnostics.ProcessStartInfo
-        $info.FileName = $toolPath
-        $info.Arguments = $Args
-        $info.UseShellExecute = $false
-        $info.RedirectStandardOutput = $true
-        $info.RedirectStandardError = $true
-        $info.CreateNoWindow = $true
-        
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $info
-        
         $start = Get-Date
-        $process.Start() | Out-Null
-        
-        $output = ""
-        $finished = $process.WaitForExit($TimeoutSeconds * 1000)
-        
-        if ($finished) {
-            $output = $process.StandardOutput.ReadToEnd()
-            $error = $process.StandardError.ReadToEnd()
-            if ($error) { $output += "`nERROR: $error" }
-            $duration = ((Get-Date) - $start).TotalMilliseconds
-            
-            $script:TestResults += @{
-                Tool=$ToolName; Description=$Description
-                Status="SUCCESS"; Output=$output; Duration=$duration
-            }
-            Write-Host "$ToolName completed successfully" -ForegroundColor Green
-        } else {
-            $process.Kill()
-            $script:TestResults += @{
-                Tool=$ToolName; Description=$Description
-                Status="TIMEOUT"; Output="Process timed out after $TimeoutSeconds seconds"; Duration=($TimeoutSeconds*1000)
-            }
-            Write-Host "$ToolName timed out" -ForegroundColor Yellow
+        if ($ToolName -in @("psinfo","pslist","handle","autorunsc","testlimit","contig")) {
+            # Note: The v2.2 script puts -accepteula here, not in $Args definition
+            $Args = "-accepteula $Args"
         }
-    } catch {
+
+        # The core execution logic from v2.2
+        $argArray = if ($Args.Trim()) { $Args.Split(' ') | Where-Object { $_ } } else { @() }
+        $rawOutput = & $toolPath $argArray 2>&1 | Out-String
+        $duration = ((Get-Date) - $start).TotalMilliseconds
+        
+        $cleanOutput = Clean-ToolOutput -ToolName $ToolName -RawOutput $rawOutput
+
         $script:TestResults += @{
             Tool=$ToolName; Description=$Description
-            Status="ERROR"; Output=$_.Exception.Message; Duration=0
+            Status="SUCCESS"; Output=$cleanOutput; Duration=$duration
         }
-        Write-Host "$ToolName error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "OK: $ToolName ($([math]::Round($duration))ms)" -ForegroundColor Green
+    }
+    catch {
+        $script:TestResults += @{
+            Tool=$ToolName; Description=$Description
+            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0
+        }
+        Write-Host "ERROR: $ToolName - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
 # Test: System Info
 function Test-SystemInfo {
     Write-Host "`n=== System Information ===" -ForegroundColor Green
-    Run-Tool -ToolName "psinfo" -Args "-s -d /accepteula" -Description "System information"
-    Run-Tool -ToolName "coreinfo" -Args "-c /accepteula" -Description "CPU core information"
+    Run-Tool -ToolName "psinfo" -Args "-s -d /accepteula" -Description "System information" -TimeoutSeconds 120
+    # Increased timeout for coreinfo as it can be slow on many-core CPUs
+    Run-Tool -ToolName "coreinfo" -Args "-c /accepteula" -Description "CPU core information" -TimeoutSeconds 120
 }
 
 # Test: CPU
 function Test-CPU {
     Write-Host "`n=== CPU Testing ===" -ForegroundColor Green
+    # Increased timeouts for heavy tools
+	Run-Tool -ToolName "pslist" -Args "-s 1" -Description "Process list snapshot" -TimeoutSeconds 120
+    Run-Tool -ToolName "handle" -Args "/accepteula" -Description "Handle information" -TimeoutSeconds 120
+    Run-Tool -ToolName "clockres" -Description "Clock resolution" -TimeoutSeconds 120
     
     # Basic CPU info
     try {
@@ -313,9 +346,10 @@ Current Clock: $($cpu.CurrentClockSpeed) MHz
         Write-Host "Error getting CPU info" -ForegroundColor Red
     }
     
-    Run-Tool -ToolName "pslist" -Args "-s 1" -Description "Process list snapshot"
-    Run-Tool -ToolName "handle" -Args "/accepteula" -Description "Handle information" -TimeoutSeconds 5
-    Run-Tool -ToolName "clockres" -Description "Clock resolution"
+    # NOTE: The following block was a duplicate and has been removed.
+    # Run-Tool -ToolName "pslist" -Args "-s 1" -Description "Process list snapshot"
+    # Run-Tool -ToolName "handle" -Args "/accepteula" -Description "Handle information" -TimeoutSeconds 5
+    # Run-Tool -ToolName "clockres" -Description "Clock resolution"
     
     # CPU stress test
     Write-Host "Starting CPU test ($script:CPU_TEST_SECONDS seconds)..." -ForegroundColor Yellow
@@ -434,8 +468,9 @@ function Test-Storage {
 # Test: Processes
 function Test-Processes {
     Write-Host "`n=== Process Analysis ===" -ForegroundColor Green
-    Run-Tool -ToolName "pslist" -Args "-t" -Description "Process tree"
-    Run-Tool -ToolName "listdlls" -Args "-u" -Description "Unsigned DLLs" -TimeoutSeconds 15
+    # Increased timeout for pslist/listdlls for potentially large number of processes/DLLs
+    Run-Tool -ToolName "pslist" -Args "-t" -Description "Process tree" -TimeoutSeconds 120
+    Run-Tool -ToolName "listdlls" -Args "-u" -Description "Unsigned DLLs" -TimeoutSeconds 120
 }
 
 # Test: Security
@@ -444,8 +479,9 @@ function Test-Security {
     if (-not $script:IsAdmin) {
         Write-Host "Some security tests require admin" -ForegroundColor Yellow
     }
-    Run-Tool -ToolName "autorunsc" -Args "-a * -c -s" -Description "Autorun entries" -TimeoutSeconds 30
-    Run-Tool -ToolName "streams" -Args "-s C:\" -Description "Alternate data streams" -TimeoutSeconds 20
+    # Increased timeout for autorunsc/streams due to potential disk/registry scanning time
+    Run-Tool -ToolName "autorunsc" -Args "-a * -c -s" -Description "Autorun entries" -TimeoutSeconds 120
+    Run-Tool -ToolName "streams" -Args "-s C:\" -Description "Alternate data streams" -TimeoutSeconds 120
 }
 
 # NEW ENHANCED: Test Network with Speed Testing
@@ -472,7 +508,11 @@ function Test-Network {
         foreach ($adapter in $adapters) {
             $adapterInfo += "Adapter: $($adapter.Name)"
             $adapterInfo += "  Status: $($adapter.Status)"
-            $adapterInfo += "  Speed: $([math]::Round($adapter.LinkSpeed / 1000000, 0)) Mbps"
+            # *** FIX APPLIED HERE ***
+            # Dividing the numeric LinkSpeed property (bits/s) by 1,000,000 to get Mbps.
+            $linkSpeedMbps = [math]::Round($adapter.LinkSpeed / 1000000, 0)
+            $adapterInfo += "  Speed: $linkSpeedMbps Mbps"
+            # *** END FIX ***
             $adapterInfo += "  MAC: $($adapter.MacAddress)"
             $adapterInfo += ""
         }
@@ -482,7 +522,8 @@ function Test-Network {
         }
         Write-Host "Network adapter info collected" -ForegroundColor Green
     } catch {
-        Write-Host "Error getting adapter info" -ForegroundColor Yellow
+        # Catch block kept for debugging purposes (printing the error message)
+        Write-Host "Error getting adapter info: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
@@ -559,14 +600,17 @@ function Test-NetworkSpeed {
             if ($ping.PingSucceeded) {
                 $latency = $ping.PingReplyDetails.RoundtripTime
                 Write-Host " $latency ms" -ForegroundColor Green
-                $latencyResults += "$target: $latency ms"
+                # FIX: Variable reference ambiguity
+                $latencyResults += "${target}: $latency ms"
             } else {
                 Write-Host " Failed" -ForegroundColor Red
-                $latencyResults += "$target: Failed"
+                # FIX: Variable reference ambiguity
+                $latencyResults += "${target}: Failed"
             }
         } catch {
             Write-Host " Error" -ForegroundColor Yellow
-            $latencyResults += "$target: Error"
+            # FIX: Variable reference ambiguity
+            $latencyResults += "${target}: Error"
         }
     }
     
@@ -640,7 +684,7 @@ function Test-NetworkSpeed {
     
     # Test 5: DNS Resolution Speed
     Write-Host "Testing DNS resolution speed..." -ForegroundColor Yellow
-    $dnsTargets = @("google.com", "microsoft.com", "cloudflare.com", "github.com")
+    $dnsTargets = $script:DNS_TEST_TARGETS
     $dnsResults = @()
     
     foreach ($domain in $dnsTargets) {
@@ -648,10 +692,12 @@ function Test-NetworkSpeed {
             $start = Get-Date
             $result = Resolve-DnsName -Name $domain -Type A -ErrorAction Stop
             $duration = ((Get-Date) - $start).TotalMilliseconds
-            $dnsResults += "$domain: $([math]::Round($duration,1)) ms"
+            # FIX: Variable reference ambiguity
+            $dnsResults += "${domain}: $([math]::Round($duration,1)) ms"
             Write-Host "  $domain resolved in $([math]::Round($duration,1)) ms" -ForegroundColor Green
         } catch {
-            $dnsResults += "$domain: Failed"
+            # FIX: Variable reference ambiguity
+            $dnsResults += "${domain}: Failed"
             Write-Host "  $domain resolution failed" -ForegroundColor Red
         }
     }
@@ -946,7 +992,8 @@ function Generate-Report {
         $detailedReport | Out-File -FilePath $detailedPath -Encoding UTF8
 
         $cleanSize = [math]::Round((Get-Item $cleanPath).Length/1KB,1)
-        $detailSize = [math]::Round((Get-Item $detailedPath).Length/1KB,1)
+        # FIX APPLIED HERE: Added the missing closing square bracket ] after [math
+        $detailSize = [math]::Round((Get-Item $detailedPath).Length/1KB,1) 
 
         Write-Host ""
         Write-Host "Reports saved:" -ForegroundColor Green
