@@ -1,11 +1,11 @@
 # Portable Sysinternals System Tester - FINAL MERGED VERSION
 # Created by Pacific Northwest Computers - 2025
-# Complete Production Version - v2.2 (Merged and Debugged)
+# Complete Production Version - v2.3 (Merged and Debugged)
 
 param([switch]$AutoRun)
 
 # Constants
-$script:VERSION = "2.2"
+$script:VERSION = "2.3"
 $script:DXDIAG_TIMEOUT = 50
 $script:ENERGY_DURATION = 20
 $script:CPU_TEST_SECONDS = 30
@@ -384,14 +384,14 @@ function Test-Storage {
     }
 }
 
-# Test: Processes (Updated to use v2.2 tools and calls)
+# Test: Processes (Updated to use v2.3 tools and calls)
 function Test-Processes {
     Write-Host "`n=== Process Analysis ===" -ForegroundColor Green
     Run-Tool -ToolName "pslist" -Args "-t" -Description "Process tree"
     Run-Tool -ToolName "listdlls" -Args "-u" -Description "Unsigned DLLs"
 }
 
-# Test: Security (Updated to use v2.2 tools and calls)
+# Test: Security (Updated to use v2.3 tools and calls)
 function Test-Security {
     Write-Host "`n=== Security Analysis ===" -ForegroundColor Green
     if (-not $script:IsAdmin) {
@@ -401,7 +401,7 @@ function Test-Security {
     Run-Tool -ToolName "streams" -Args "-s C:\" -Description "Alternate data streams"
 }
 
-# Test: Network (Combined Basic/NIC from v2.2 logic)
+# Test: Network (Combined Basic/NIC from v2.3 logic)
 function Test-Network {
     Write-Host "`n=== Network Analysis ===" -ForegroundColor Green
     
@@ -417,7 +417,7 @@ function Test-Network {
         Write-Host "Error getting network info" -ForegroundColor Red
     }
     
-    # Network adapter information (from v2.1 NIC + v2.2 speed fix)
+    # Network adapter information (from v2.1 NIC + v2.3 speed fix)
 	Write-Host "Gathering network adapter information..." -ForegroundColor Yellow
     try {
         $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object {$_.Status -eq "Up"}
@@ -575,7 +575,7 @@ function Test-StorageSMART {
             $info += "Disk: $($disk.DeviceId)"
             $info += "  Temperature: $($disk.Temperature)°C"
             $info += "  Power On Hours: $($disk.PowerOnHours)"
-            # Note: The v2.2 reporting needs a 'Temperature: \d+' match, ensure data is output if possible
+            # Note: The v2.3 reporting needs a 'Temperature: \d+' match, ensure data is output if possible
             $info += ""
         }
         $script:TestResults += @{
