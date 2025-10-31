@@ -570,9 +570,20 @@ function Test-Trim {
         }
         $txt = $map.GetEnumerator() | ForEach-Object {
             $status = if ($_.Value -eq "0") { "Enabled" } else { "Disabled" }
-            "$($_.Key): $status"
+            "$($_.Key): TRIM $status"
         }
         if (-not $txt) { $txt = @("TRIM status unknown") }
+
+        if ($map.Count -gt 0) {
+            $enabledCount = ($map.GetEnumerator() | Where-Object { $_.Value -eq "0" }).Count
+            if ($enabledCount -eq $map.Count) {
+                $txt += "Overall: TRIM is ENABLED"
+            } elseif ($enabledCount -eq 0) {
+                $txt += "Overall: TRIM is DISABLED"
+            } else {
+                $txt += "Overall: TRIM mixed (check per-filesystem status)"
+            }
+        }
 
         $script:TestResults += @{
             Tool="SSD-TRIM"; Description="TRIM status"
@@ -842,17 +853,25 @@ function Test-GPU {
         $gpus = Get-CimInstance Win32_VideoController
         foreach ($gpu in $gpus) {
             if ($gpu.Name) {
-                $year = if ($gpu.DriverDate) { 
-                    ([DateTime]$gpu.DriverDate).Year 
-                } else { 
-                    2020 
+                $driverYear = $null
+                if ($gpu.DriverDate) {
+                    try {
+                        $driverYear = ([DateTime]$gpu.DriverDate).Year
+                    } catch {
+                        $driverYear = $null
+                    }
                 }
-                
-                $featureLevel = if ($year -ge 2020) { "12_x" } 
-                               elseif ($year -ge 2016) { "12_0" }
-                               elseif ($year -ge 2012) { "11_0" }
+
+                if (-not $driverYear) {
+                    # Fall back to a conservative default if parsing fails
+                    $driverYear = 2014
+                }
+
+                $featureLevel = if ($driverYear -ge 2020) { "12_x" }
+                               elseif ($driverYear -ge 2016) { "12_0" }
+                               elseif ($driverYear -ge 2012) { "11_0" }
                                else { "10_x" }
-                
+
                 $capabilities += "$($gpu.Name): Likely supports DirectX $featureLevel"
             }
         }
@@ -907,23 +926,43 @@ function Test-GPUVendorSpecific {
     
     # Check for AMD
     try {
-        $amdRegistry = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000"
-        
-        if (Test-Path $amdRegistry) {
-            $amdInfo = Get-ItemProperty $amdRegistry -ErrorAction Stop
-            
-            $amdOutput = @()
-            $amdOutput += "AMD GPU Detected"
-            $amdOutput += "Driver Description: $($amdInfo.DriverDesc)"
-            $amdOutput += "Driver Version: $($amdInfo.DriverVersion)"
-            $amdOutput += "Driver Date: $($amdInfo.DriverDate)"
-            
-            if ($amdInfo.DriverDesc -match "AMD|Radeon") {
+        $amdClassRoot = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+
+        if (Test-Path $amdClassRoot) {
+            $amdOutputs = @()
+            $detected = $false
+
+            $subKeys = Get-ChildItem $amdClassRoot -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match "^\d{4}$" }
+            foreach ($subKey in $subKeys) {
+                try {
+                    $amdInfo = Get-ItemProperty $subKey.PSPath -ErrorAction Stop
+                } catch {
+                    continue
+                }
+
+                if ($amdInfo.DriverDesc -and $amdInfo.DriverDesc -match "AMD|Radeon") {
+                    $detected = $true
+                    $amdOutputs += "AMD GPU Slot $($subKey.PSChildName)"
+                    $amdOutputs += "Driver Description: $($amdInfo.DriverDesc)"
+                    if ($amdInfo.DeviceDesc) { $amdOutputs += "Device: $($amdInfo.DeviceDesc)" }
+                    if ($amdInfo.DriverVersion) { $amdOutputs += "Driver Version: $($amdInfo.DriverVersion)" }
+                    if ($amdInfo.DriverDate) { $amdOutputs += "Driver Date: $($amdInfo.DriverDate)" }
+                    $amdOutputs += ""
+                }
+            }
+
+            if ($detected) {
                 $script:TestResults += @{
                     Tool="AMD-GPU"; Description="AMD GPU information"
-                    Status="SUCCESS"; Output=($amdOutput -join "`n"); Duration=100
+                    Status="SUCCESS"; Output=($amdOutputs -join "`n"); Duration=150
                 }
                 Write-Host "AMD GPU information collected" -ForegroundColor Green
+            } else {
+                Write-Host "AMD GPU not detected" -ForegroundColor DarkGray
+                $script:TestResults += @{
+                    Tool="AMD-GPU"; Description="AMD GPU information"
+                    Status="SKIPPED"; Output="No AMD GPU detected"; Duration=0
+                }
             }
         } else {
             Write-Host "AMD GPU not detected" -ForegroundColor DarkGray
@@ -1052,6 +1091,8 @@ function Test-HardwareEvents {
 function Test-WindowsUpdate {
     Write-Host "`n=== Windows Update ===" -ForegroundColor Green
     $updateSession = $null
+    $searcher = $null
+    $result = $null
     try {
         $lines = @()
         try {
@@ -1080,6 +1121,12 @@ function Test-WindowsUpdate {
     } catch {
         Write-Host "Windows Update check failed" -ForegroundColor Yellow
     } finally {
+        if ($result) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($result) | Out-Null } catch {}
+        }
+        if ($searcher) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($searcher) | Out-Null } catch {}
+        }
         if ($updateSession) {
             try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null } catch {}
         }
@@ -1338,14 +1385,16 @@ function Generate-Report {
 
     # === GPU HEALTH ===
     if ($gpuDetails) {
-        if ($gpuDetails.Output -match "Driver Date:.*(\d{4})") {
-            $driverYear = [int]$matches[1]
-            $currentYear = (Get-Date).Year
-            if ($currentYear - $driverYear -gt 1) {
-                $recommendations += "• INFO: GPU drivers are over 1 year old"
-                $recommendations += "  → Update to latest drivers for best performance"
-                $recommendations += "  → NVIDIA: GeForce Experience or nvidia.com"
-                $recommendations += "  → AMD: amd.com/en/support"
+        if ($gpuDetails.Output -match "Driver Date:.*?(\d{4})") {
+            $driverYear = 0
+            if ([int]::TryParse($matches[1], [ref]$driverYear)) {
+                $currentYear = (Get-Date).Year
+                if ($currentYear - $driverYear -gt 1) {
+                    $recommendations += "• INFO: GPU drivers are over 1 year old"
+                    $recommendations += "  → Update to latest drivers for best performance"
+                    $recommendations += "  → NVIDIA: GeForce Experience or nvidia.com"
+                    $recommendations += "  → AMD: amd.com/en/support"
+                }
             }
         }
     }
