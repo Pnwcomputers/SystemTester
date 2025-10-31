@@ -4,13 +4,13 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Production Ready Version - v2.2
+:: Production Ready Version - v2.21
 :: =====================================================
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
 set "DOWNLOAD_TIMEOUT_SEC=120"
-set "SCRIPT_VERSION=2.2"
+set "SCRIPT_VERSION=2.21"
 if not defined ST_DEBUG set "ST_DEBUG=0"
 set "LAUNCH_LOG=%TEMP%\SystemTester_launcher.log"
 
@@ -639,7 +639,7 @@ echo ========================================================
 echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo NEW IN v2.2:
+echo NEW IN v2.21:
 echo   - Tool integrity verification (digital signatures)
 echo   - Dual report system (Clean + Detailed)
 echo   - Fixed memory usage calculation bug
@@ -668,7 +668,7 @@ echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
 echo    Extract to: %SCRIPT_DIR%\Sysinternals\
 echo.
 echo 5. MEMORY SHOWS 100%% (but Task Manager shows less)
-echo    This was a bug in v2.08 - FIXED in v2.2
+echo    This was a bug in v2.08 - FIXED in v2.21
 echo.
 echo 6. TESTS TAKE TOO LONG
 echo    Expected durations:
