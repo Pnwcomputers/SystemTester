@@ -537,7 +537,12 @@ function Test-NetworkSpeed {
         $tempFile = [System.IO.Path]::GetTempFileName()
         Write-Host "Running internet download test (~10MB)..." -ForegroundColor Yellow
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        Invoke-WebRequest -Uri $testUrl -OutFile $tempFile -UseBasicParsing -TimeoutSec 120 | Out-Null
+        # Use compatible parameters across PowerShell versions
+        $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
+        $iwParams = @{ Uri = $testUrl; OutFile = $tempFile }
+        if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $iwParams.UseBasicParsing = $true }
+        if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec')) { $iwParams.TimeoutSec = 120 }
+        Invoke-WebRequest @iwParams | Out-Null
         $stopwatch.Stop()
 
         $fileInfo = Get-Item $tempFile

@@ -274,7 +274,7 @@ if /i not "%confirm%"=="Y" goto MENU
 
 echo.
 echo Downloading...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%ZIP_FILE%' -TimeoutSec %DOWNLOAD_TIMEOUT_SEC%; Write-Host 'Download complete' -ForegroundColor Green } catch { Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue; $p = @{ Uri = '%DOWNLOAD_URL%'; OutFile = '%ZIP_FILE%' }; if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $p.UseBasicParsing = $true }; if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec')) { $p.TimeoutSec = %DOWNLOAD_TIMEOUT_SEC% }; Invoke-WebRequest @p; Write-Host 'Download complete' -ForegroundColor Green } catch { Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
 
 if errorlevel 1 (
     echo.
