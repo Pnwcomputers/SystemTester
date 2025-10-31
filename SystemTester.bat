@@ -55,16 +55,11 @@ echo.
 
 set "_ELEV_ARGS=/elevated"
 if "%ST_DEBUG%"=="1" set "_ELEV_ARGS=/elevated debug"
-if "%ST_DEBUG%"=="1" echo [%DATE% %TIME%] Elevating: "%~f0" %_ELEV_ARGS% >> "%LAUNCH_LOG%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%_ELEV_ARGS%' -Verb RunAs -WorkingDirectory '%CD%' -WindowStyle Normal"
-
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%_ELEV_ARGS%' -Verb RunAs -WorkingDirectory '%~dp0'"
 if errorlevel 1 (
-    echo [ERROR] Failed to elevate. Run manually as administrator.
+    echo [ERROR] Failed to elevate.
     pause
 )
-echo.
-echo Press any key to close this window. The elevated window should now be open.
-pause >nul
 exit /b
 
 :ADMIN_CONFIRMED
@@ -121,9 +116,7 @@ if "%SCRIPT_PS1%"=="" (
 
 echo Using PowerShell script: %SCRIPT_PS1_NAME%
 if "%ST_DEBUG%"=="1" (
-    set "_EX=NO"
-    if exist "%SCRIPT_PS1%" set "_EX=YES"
-    >> "%LAUNCH_LOG%" echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" (exists: !_EX!)
+    echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" ^(exists: ^<^%SCRIPT_PS1%^^?^) >> "%LAUNCH_LOG%"
 )
 echo.
 
@@ -194,8 +187,7 @@ echo.
 pause
 set "PS_EXTRA="
 if "%ST_DEBUG%"=="1" set "PS_EXTRA=-NoExit"
-if "%ST_DEBUG%"=="1" echo [%DATE% %TIME%] Launching PS interactive: powershell -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%" >> "%LAUNCH_LOG%"
-powershell -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%"
 echo.
 if errorlevel 1 (
     echo [ERROR] Script failed (code: %errorlevel%)
@@ -219,8 +211,7 @@ pause
 echo.
 set "PS_EXTRA="
 if "%ST_DEBUG%"=="1" set "PS_EXTRA=-NoExit"
-if "%ST_DEBUG%"=="1" echo [%DATE% %TIME%] Launching PS autorun: powershell -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%" -AutoRun >> "%LAUNCH_LOG%"
-powershell -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%" -AutoRun
+powershell.exe -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%" -AutoRun
 echo.
 if errorlevel 1 (
     echo [ERROR] Tests failed (code: %errorlevel%)
@@ -740,15 +731,3 @@ echo   - energy-report.html (if power test ran)
 echo.
 pause
 exit /b 0
-if not exist "%SCRIPT_PS1%" (
-    echo [ERROR] PowerShell script not found at: %SCRIPT_PS1%
-    if "%ST_DEBUG%"=="1" >> "%LAUNCH_LOG%" echo [%DATE% %TIME%] ERROR: PS1 missing at "%SCRIPT_PS1%"
-    pause
-    goto MENU
-)
-if not exist "%SCRIPT_PS1%" (
-    echo [ERROR] PowerShell script not found at: %SCRIPT_PS1%
-    if "%ST_DEBUG%"=="1" >> "%LAUNCH_LOG%" echo [%DATE% %TIME%] ERROR: PS1 missing at "%SCRIPT_PS1%"
-    pause
-    goto MENU
-)
