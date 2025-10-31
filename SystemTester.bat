@@ -4,12 +4,11 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Production Ready Version - v2.2
+:: Production Ready Version - v2.2 (FIXED)
 :: =====================================================
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
-REM ^-- Minimum expected ZIP size (~10MB) for validation
 set "DOWNLOAD_TIMEOUT_SEC=120"
 set "SCRIPT_VERSION=2.2"
 
@@ -49,7 +48,7 @@ echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs"
 
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo [ERROR] Failed to elevate. Run manually as administrator.
     pause
 )
@@ -61,7 +60,7 @@ color 0B
 
 :: Change to script directory
 cd /d "%~dp0" 2>nul
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo [ERROR] Cannot access directory: %~dp0
     pause
     exit /b 1
@@ -112,7 +111,7 @@ if "%PS_VERSION%"=="" (
 echo PowerShell version: %PS_VERSION%
 echo.
 
-:: Check for Sysinternals folder (FIXED: Removed duplicate)
+:: FIXED: Check for Sysinternals folder (removed duplicate)
 if not exist "%SCRIPT_DIR%\Sysinternals" (
     echo [WARNING] Sysinternals folder not found!
     echo Use Menu Option 5 to download automatically.
@@ -176,7 +175,7 @@ echo.
 pause
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%"
 echo.
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo [ERROR] Script failed (code: %errorlevel%)
     pause
 ) else (
@@ -198,7 +197,7 @@ pause
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -AutoRun
 echo.
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo [ERROR] Tests failed (code: %errorlevel%)
     pause
 ) else (
@@ -266,7 +265,7 @@ echo.
 echo Downloading...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%ZIP_FILE%' -TimeoutSec %DOWNLOAD_TIMEOUT_SEC%; Write-Host 'Download complete' -ForegroundColor Green } catch { Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
 
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo.
     echo Download failed. Check internet connection.
     if exist "%ZIP_FILE%" del "%ZIP_FILE%" 2>nul
@@ -340,13 +339,14 @@ echo --------------------------------------------------------
 echo INSTALLED TOOLS:
 echo --------------------------------------------------------
 
-:: Check GPU-Z with size validation
+:: FIXED: Check GPU-Z with size validation
 if exist "%GPUZ_PATH%" (
     for %%A in ("%GPUZ_PATH%") do set "GPUZ_SIZE=%%~zA"
     if !GPUZ_SIZE! GTR 1000000 (
         echo [OK] GPU-Z.exe - Installed ^(!GPUZ_SIZE! bytes^)
     ) else (
         echo [!] GPU-Z.exe - File exists but seems corrupted ^(!GPUZ_SIZE! bytes^)
+        echo     Expected size: ^>1MB. Re-download recommended.
     )
 ) else (
     echo [ ] GPU-Z.exe - Not installed
@@ -358,10 +358,15 @@ if exist "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe" (
     echo [ ] NVIDIA-SMI - Not installed ^(NVIDIA GPU drivers^)
 )
 
-:: Check for AMD tools (FIXED: Check multiple registry keys)
+:: FIXED: Check for AMD tools (check ALL registry subkeys)
 set "AMD_FOUND="
 for /f "tokens=*" %%K in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" /s 2^>nul ^| find "HKEY_"') do (
     reg query "%%K" /v DriverDesc 2>nul | find /i "AMD" >nul 2>&1
+    if not errorlevel 1 (
+        set "AMD_FOUND=YES"
+        goto :AMD_FOUND
+    )
+    reg query "%%K" /v DriverDesc 2>nul | find /i "Radeon" >nul 2>&1
     if not errorlevel 1 (
         set "AMD_FOUND=YES"
         goto :AMD_FOUND
@@ -403,7 +408,10 @@ if exist "%GPUZ_PATH%" (
         echo Size: !GPUZ_SIZE! bytes
         if !GPUZ_SIZE! LSS 1000000 (
             echo [WARNING] File seems too small. May be corrupted.
+            echo           Expected size: ^>1MB
             echo           Re-download if GPU-Z doesn't work properly.
+        ) else (
+            echo [OK] File size looks good
         )
     )
     echo.
@@ -429,7 +437,7 @@ echo.
 echo Creating Tools directory...
 if not exist "%GPU_TOOLS_DIR%" (
     mkdir "%GPU_TOOLS_DIR%" 2>nul
-    if errorlevel 1 (
+    if %errorlevel% neq 0 (
         echo [ERROR] Cannot create directory: %GPU_TOOLS_DIR%
         pause
         goto GPU_TOOLS
@@ -450,6 +458,7 @@ echo 2. Save it to: %GPU_TOOLS_DIR%
 echo 3. Rename it to: GPU-Z.exe
 echo.
 echo Full path should be: %GPUZ_PATH%
+echo Expected file size: 5-10 MB
 echo.
 echo NOTE: TechPowerUp doesn't provide direct download links,
 echo       so manual download is required.
@@ -508,35 +517,69 @@ echo             AMD TOOLS VERIFICATION
 echo ========================================================
 echo.
 
-:: Check for AMD GPU (FIXED: Check all registry subkeys)
+:: FIXED: Check for AMD GPU (check ALL registry subkeys)
 set "AMD_FOUND="
 set "AMD_NAME="
 set "AMD_DRIVER_VERSION="
 set "AMD_DRIVER_DATE="
+set "AMD_COUNT=0"
+
+echo Scanning for AMD GPUs in all registry locations...
+echo.
 
 for /f "tokens=*" %%K in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" /s 2^>nul ^| find "HKEY_"') do (
     for /f "tokens=2*" %%a in ('reg query "%%K" /v DriverDesc 2^>nul ^| find "DriverDesc"') do (
         echo %%b | find /i "AMD" >nul 2>&1
         if not errorlevel 1 (
             set "AMD_FOUND=YES"
-            set "AMD_NAME=%%b"
+            set /a AMD_COUNT+=1
             
-            :: Get driver version and date
-            for /f "tokens=2*" %%v in ('reg query "%%K" /v DriverVersion 2^>nul ^| find "DriverVersion"') do set "AMD_DRIVER_VERSION=%%w"
-            for /f "tokens=2*" %%d in ('reg query "%%K" /v DriverDate 2^>nul ^| find "DriverDate"') do set "AMD_DRIVER_DATE=%%d"
-            goto :AMD_INFO_FOUND
+            echo [AMD GPU #!AMD_COUNT!]
+            echo Device: %%b
+            
+            :: Get driver version
+            for /f "tokens=2*" %%v in ('reg query "%%K" /v DriverVersion 2^>nul ^| find "DriverVersion"') do (
+                echo Driver Version: %%w
+            )
+            
+            :: Get driver date
+            for /f "tokens=2*" %%d in ('reg query "%%K" /v DriverDate 2^>nul ^| find "DriverDate"') do (
+                echo Driver Date: %%d
+            )
+            
+            :: Get registry key location
+            echo Registry Key: %%K
+            echo.
+        ) else (
+            echo %%b | find /i "Radeon" >nul 2>&1
+            if not errorlevel 1 (
+                set "AMD_FOUND=YES"
+                set /a AMD_COUNT+=1
+                
+                echo [AMD GPU #!AMD_COUNT!]
+                echo Device: %%b
+                
+                :: Get driver version
+                for /f "tokens=2*" %%v in ('reg query "%%K" /v DriverVersion 2^>nul ^| find "DriverVersion"') do (
+                    echo Driver Version: %%w
+                )
+                
+                :: Get driver date
+                for /f "tokens=2*" %%d in ('reg query "%%K" /v DriverDate 2^>nul ^| find "DriverDate"') do (
+                    echo Driver Date: %%d
+                )
+                
+                :: Get registry key location
+                echo Registry Key: %%K
+                echo.
+            )
         )
     )
 )
 
-:AMD_INFO_FOUND
 if defined AMD_FOUND (
-    echo [OK] AMD GPU Detected: %AMD_NAME%
-    echo.
-    echo AMD Driver Information:
     echo ========================================================
-    if defined AMD_DRIVER_VERSION echo Driver Version: %AMD_DRIVER_VERSION%
-    if defined AMD_DRIVER_DATE echo Driver Date: %AMD_DRIVER_DATE%
+    echo Total AMD GPUs detected: %AMD_COUNT%
     echo ========================================================
     echo.
     echo NOTE: AMD doesn't provide a command-line tool like
@@ -554,6 +597,7 @@ if defined AMD_FOUND (
     echo If you have an AMD GPU but it's not detected:
     echo 1. Update AMD drivers from: https://www.amd.com/en/support
     echo 2. Use AMD Auto-Detect tool
+    echo 3. Check Device Manager for display adapters
     echo.
     echo If you don't have an AMD GPU, this is normal.
 )
@@ -649,14 +693,17 @@ echo ========================================================
 echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo NEW IN v2.2:
+echo NEW IN v2.2 (FIXED):
 echo   - Tool integrity verification (digital signatures)
 echo   - Dual report system (Clean + Detailed)
 echo   - Fixed memory usage calculation bug
 echo   - Launcher awareness detection
 echo   - Enhanced GPU testing with vendor-specific tools
 echo   - GPU Tools Manager (Menu Option 6)
-echo   - Improved AMD GPU detection for multi-GPU systems
+echo   - FIXED: AMD GPU detection now checks ALL registry keys
+echo   - FIXED: GPU-Z size validation added
+echo   - FIXED: Removed duplicate Sysinternals check
+echo   - FIXED: Consistent errorlevel checking
 echo.
 echo --------------------------------------------------------
 echo COMMON ISSUES:
@@ -688,9 +735,9 @@ echo    PSPing enables: Bandwidth testing, TCP latency
 echo.
 echo 7. TESTS TAKE TOO LONG
 echo    Expected durations:
-echo    - CPU Test: 10 seconds
-echo    - Network Speed: 30-60 seconds
-echo    - Energy Report: 15 seconds
+echo    - CPU Test: 30 seconds
+echo    - Disk Test: 10-30 seconds  
+echo    - Energy Report: 20 seconds (configurable)
 echo    - Windows Update: 30-90 seconds
 echo    - DISM/SFC: 5-15 minutes each
 echo.
@@ -705,8 +752,16 @@ echo    Limit: 260 characters
 echo    Solution: Move to C:\SysTest\
 echo.
 echo 10. AMD GPU NOT DETECTED
-echo     - Script now checks ALL registry subkeys
-echo     - Update AMD drivers if still not found
+echo     FIXED: Script now checks ALL registry subkeys
+echo     If still not detected:
+echo     - Update AMD drivers
+echo     - Check Device Manager
+echo     - Verify GPU is enabled
+echo.
+echo 11. GPU-Z FILE CORRUPTED
+echo     FIXED: Script now validates file size
+echo     Expected: 5-10 MB
+echo     If corrupted, re-download from TechPowerUp
 echo.
 echo --------------------------------------------------------
 echo FEATURES:
