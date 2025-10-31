@@ -569,7 +569,7 @@ For security vulnerabilities or sensitive findings:
 - ✅ Fixed memory leak in Windows Update test
 - ✅ Enhanced network testing suite with PSPing integration
 
-### v2.2 (Original) - January 2025
+### v2.2 (Original) - September 2025
 - Added GPU testing enhancements
 - Added tool integrity verification
 - Added dual report system
