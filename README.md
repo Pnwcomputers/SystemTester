@@ -11,16 +11,6 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
 
 ---
 
-## ⚠️ IMPORTANT: Use the FIXED Version
-
-**Version 2.2 has been debugged and all critical bugs have been fixed.** Use the files marked `_FIXED` for proper operation:
-- `SystemTester_FIXED.ps1` - PowerShell script
-- `SystemTester_FIXED.bat` - Batch launcher
-
-The original v2.2 files contained critical bugs that prevented execution. These have been resolved in the fixed versions.
-
----
-
 ## 🚀 NEW in v2.2: Enhanced GPU Testing & Critical Bug Fixes
 
 Version 2.2 introduces comprehensive GPU testing capabilities and fixes several critical bugs that prevented the script from running properly.
