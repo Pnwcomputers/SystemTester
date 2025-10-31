@@ -49,7 +49,7 @@ echo.
 echo Requesting elevation...
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs -WorkingDirectory '%CD%' -WindowStyle Normal"
 
 if errorlevel 1 (
     echo [ERROR] Failed to elevate. Run manually as administrator.
