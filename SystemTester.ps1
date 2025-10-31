@@ -1,6 +1,6 @@
-# Portable Sysinternals System Tester - FINAL MERGED VERSION
+# Portable Sysinternals System Tester - FIXED VERSION
 # Created by Pacific Northwest Computers - 2025
-# Complete Production Version - v2.2 (Merged and Debugged)
+# Complete Production Version - v2.2 (Debugged)
 
 param([switch]$AutoRun)
 
@@ -11,10 +11,9 @@ $script:ENERGY_DURATION = 20
 $script:CPU_TEST_SECONDS = 30
 $script:MAX_PATH_LENGTH = 240
 $script:MIN_TOOL_SIZE_KB = 50
-$script:DNS_TEST_TARGETS = @("google.com", "microsoft.com", "cloudflare.com", "github.com") # Added DNS Targets
+$script:DNS_TEST_TARGETS = @("google.com", "microsoft.com", "cloudflare.com", "github.com")
 
 # Paths
-# Uses the more robust method for getting the script root regardless of launch method
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $DriveLetter = (Split-Path -Qualifier $ScriptRoot).TrimEnd('\')
 $SysinternalsPath = Join-Path $ScriptRoot "Sysinternals"
@@ -31,7 +30,6 @@ Write-Host "Running from: $DriveLetter" -ForegroundColor Cyan
 
 # Detect if launched via batch file
 function Test-LauncherAwareness {
-    # ... (code unchanged)
     try {
         $parentPID = (Get-Process -Id $PID).Parent.Id
         if ($parentPID) {
@@ -49,7 +47,6 @@ function Test-LauncherAwareness {
 
 # Check admin privileges
 function Test-AdminPrivileges {
-    # ... (code unchanged)
     try {
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -65,63 +62,202 @@ function Test-AdminPrivileges {
     }
 }
 
-# Tool integrity verification
+# FIXED: Initialize environment
+function Initialize-Environment {
+    Write-Host "`nInitializing environment..." -ForegroundColor Cyan
+    
+    Test-LauncherAwareness | Out-Null
+    Test-AdminPrivileges | Out-Null
+    
+    if ($ScriptRoot.Length -gt $script:MAX_PATH_LENGTH) {
+        Write-Host "WARNING: Path length ($($ScriptRoot.Length)) exceeds recommended maximum" -ForegroundColor Yellow
+        Write-Host "         Consider moving to a shorter path like C:\SysTest\" -ForegroundColor Yellow
+    }
+    
+    if (!(Test-Path $SysinternalsPath)) {
+        Write-Host "ERROR: Sysinternals folder not found at: $SysinternalsPath" -ForegroundColor Red
+        Write-Host "" -ForegroundColor Red
+        if ($script:LaunchedViaBatch) {
+            Write-Host "ACTION: Return to batch launcher and use Menu Option 5 to download tools" -ForegroundColor Yellow
+        } else {
+            Write-Host "ACTION: Download Sysinternals Suite from:" -ForegroundColor Yellow
+            Write-Host "        https://download.sysinternals.com/files/SysinternalsSuite.zip" -ForegroundColor Yellow
+            Write-Host "        Extract to: $SysinternalsPath" -ForegroundColor Yellow
+        }
+        return $false
+    }
+    
+    $requiredTools = @("psinfo.exe", "coreinfo.exe", "pslist.exe", "handle.exe", "clockres.exe")
+    $found = 0
+    $missing = @()
+    
+    foreach ($tool in $requiredTools) {
+        $toolPath = Join-Path $SysinternalsPath $tool
+        if (Test-Path $toolPath) {
+            $found++
+        } else {
+            $missing += $tool
+        }
+    }
+    
+    if ($found -eq 0) {
+        Write-Host "ERROR: No Sysinternals tools found in $SysinternalsPath" -ForegroundColor Red
+        if ($script:LaunchedViaBatch) {
+            Write-Host "ACTION: Use Batch Menu Option 5 to download tools" -ForegroundColor Yellow
+        }
+        return $false
+    }
+    
+    Write-Host "Environment check: $found/$($requiredTools.Count) key tools found" -ForegroundColor Green
+    
+    if ($missing.Count -gt 0) {
+        Write-Host "Missing tools: $($missing -join ', ')" -ForegroundColor Yellow
+        if ($script:LaunchedViaBatch) {
+            Write-Host "TIP: Use Batch Menu Option 4 to verify integrity" -ForegroundColor DarkYellow
+            Write-Host "     Use Batch Menu Option 5 to update tools" -ForegroundColor DarkYellow
+        }
+    }
+    
+    $pspingPath = Join-Path $SysinternalsPath "psping.exe"
+    if (Test-Path $pspingPath) {
+        Write-Host "PSPing detected - Network speed tests available" -ForegroundColor Green
+    } else {
+        Write-Host "PSPing not found - Basic network tests only" -ForegroundColor Yellow
+    }
+    
+    Write-Host "Environment initialized successfully" -ForegroundColor Green
+    return $true
+}
+
+# FIXED: Tool integrity verification
 function Test-ToolIntegrity {
-    # ... (code unchanged)
-    param([string]$ToolName)
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ToolName
+    )
     
     $toolPath = Join-Path $SysinternalsPath "$ToolName.exe"
     
-    # ... (rest of function logic)
+    if (!(Test-Path $toolPath)) {
+        return @{
+            Status="NOT_FOUND"
+            Details="Tool not found at: $toolPath"
+        }
+    }
+    
+    $fileInfo = Get-Item $toolPath
+    $sizeKB = [math]::Round($fileInfo.Length / 1KB, 2)
+    
+    if ($sizeKB -lt $script:MIN_TOOL_SIZE_KB) {
+        return @{
+            Status="SUSPICIOUS_SIZE"
+            Details="File size ($sizeKB KB) is suspiciously small"
+        }
+    }
+    
     try {
         $signature = Get-AuthenticodeSignature $toolPath -ErrorAction Stop
         
         if ($signature.Status -eq "Valid") {
             $subject = $signature.SignerCertificate.Subject
             if ($subject -match "Microsoft Corporation") {
-                return @{Status="VALID_MS"; Details="Valid Microsoft signature"}
+                return @{
+                    Status="VALID_MS"
+                    Details="Valid Microsoft signature | Size: $sizeKB KB"
+                }
             } else {
-                return @{Status="VALID_OTHER"; Details="Valid non-Microsoft signature: $subject"}
+                return @{
+                    Status="VALID_OTHER"
+                    Details="Valid non-Microsoft signature: $subject | Size: $sizeKB KB"
+                }
             }
         } elseif ($signature.Status -eq "NotSigned") {
-            return @{Status="NOT_SIGNED"; Details="File is not digitally signed"}
+            return @{
+                Status="NOT_SIGNED"
+                Details="File is not digitally signed | Size: $sizeKB KB"
+            }
         } else {
-            return @{Status="BAD_SIGNATURE"; Details="Signature status: $($signature.Status)"}
+            return @{
+                Status="BAD_SIGNATURE"
+                Details="Signature status: $($signature.Status) | Size: $sizeKB KB"
+            }
         }
     } catch {
-        return @{Status="CHECK_FAILED"; Details="Error: $($_.Exception.Message)"}
+        return @{
+            Status="CHECK_FAILED"
+            Details="Error checking signature: $($_.Exception.Message)"
+        }
     }
 }
 
-    # Check for key tools
-    $tools = @("psinfo.exe","coreinfo.exe","pslist.exe","handle.exe","clockres.exe")
-    $found = 0
-    $missing = @()
-    foreach ($tool in $tools) {
-        if (Test-Path (Join-Path $SysinternalsPath $tool)) {
-            $found++
-        } else {
-            $missing += $tool
-        }
+# FIXED: Added missing function for batch launcher
+function Test-ToolVerification {
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  TOOL INTEGRITY VERIFICATION" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    if (!(Test-Path $SysinternalsPath)) {
+        Write-Host "ERROR: Sysinternals folder not found: $SysinternalsPath" -ForegroundColor Red
+        return
     }
-
-    if ($found -eq 0) {
+    
+    $tools = Get-ChildItem -Path $SysinternalsPath -Filter "*.exe" -ErrorAction SilentlyContinue
+    
+    if (!$tools) {
         Write-Host "ERROR: No tools found in $SysinternalsPath" -ForegroundColor Red
-        if ($script:LaunchedViaBatch) {
-            Write-Host "ACTION: Use Batch Menu Option 5 to download tools" -ForegroundColor Yellow
-        }
-        return $false
+        return
     }
-
-    Write-Host "Found $found/$($tools.Count) key tools" -ForegroundColor Green
-    if ($missing.Count -gt 0) {
-        Write-Host "Missing: $($missing -join ', ')" -ForegroundColor Yellow
-        if ($script:LaunchedViaBatch) {
-            Write-Host "TIP: Use Batch Menu Option 4 for integrity check" -ForegroundColor DarkYellow
-            Write-Host "     Use Batch Menu Option 5 to update tools" -ForegroundColor DarkYellow
-        }
+    
+    Write-Host "Checking $($tools.Count) tools..." -ForegroundColor Yellow
+    Write-Host ""
+    
+    $results = @{
+        ValidMS = 0
+        ValidOther = 0
+        NotSigned = 0
+        BadSignature = 0
+        Failed = 0
+        Suspicious = 0
     }
-    return $true
+    
+    foreach ($tool in $tools) {
+        $toolName = $tool.BaseName
+        $result = Test-ToolIntegrity -ToolName $toolName
+        
+        $statusColor = switch ($result.Status) {
+            "VALID_MS" { $results.ValidMS++; "Green" }
+            "VALID_OTHER" { $results.ValidOther++; "Cyan" }
+            "NOT_SIGNED" { $results.NotSigned++; "Yellow" }
+            "BAD_SIGNATURE" { $results.BadSignature++; "Red" }
+            "SUSPICIOUS_SIZE" { $results.Suspicious++; "Red" }
+            "CHECK_FAILED" { $results.Failed++; "Red" }
+            default { "Gray" }
+        }
+        
+        Write-Host ("{0,-20} : {1,-15} | {2}" -f $toolName, $result.Status, $result.Details) -ForegroundColor $statusColor
+    }
+    
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "SUMMARY:" -ForegroundColor Cyan
+    Write-Host "  Valid (Microsoft): $($results.ValidMS)" -ForegroundColor Green
+    Write-Host "  Valid (Other):     $($results.ValidOther)" -ForegroundColor Cyan
+    Write-Host "  Not Signed:        $($results.NotSigned)" -ForegroundColor Yellow
+    Write-Host "  Bad Signature:     $($results.BadSignature)" -ForegroundColor Red
+    Write-Host "  Suspicious:        $($results.Suspicious)" -ForegroundColor Red
+    Write-Host "  Check Failed:      $($results.Failed)" -ForegroundColor Red
+    Write-Host "========================================" -ForegroundColor Cyan
+    
+    if ($results.BadSignature -gt 0 -or $results.Suspicious -gt 0) {
+        Write-Host ""
+        Write-Host "WARNING: Some tools have issues!" -ForegroundColor Red
+        Write-Host "ACTION: Re-download Sysinternals Suite (Batch Menu Option 5)" -ForegroundColor Yellow
+    } elseif ($results.ValidMS -gt 0) {
+        Write-Host ""
+        Write-Host "All verified tools are properly signed!" -ForegroundColor Green
+    }
 }
 
 # Clean tool output
@@ -133,11 +269,9 @@ function Clean-ToolOutput {
     $cleaned = @()
 
     foreach ($line in $lines) {
-        # Skip boilerplate
         if ($line -match "Copyright|Sysinternals|www\.|EULA|Mark Russinovich|David Solomon|Bryce Cogswell") { continue }
         if ($line -match "^-+$|^=+$|^\*+$") { continue }
 
-        # Tool-specific filtering
         switch ($ToolName) {
             "psinfo" {
                 if ($line -match "^(System|Uptime|Kernel|Product|Service|Build|Processors|Physical|Computer|Domain|Install)") {
@@ -163,7 +297,7 @@ function Clean-ToolOutput {
     return ($cleaned | Select-Object -First 40) -join "`n"
 }
 
-# Run tool (Uses v2.2 reliable call & quotes path for spaces)
+# Run tool
 function Run-Tool {
     param(
         [string]$ToolName,
@@ -191,19 +325,13 @@ function Run-Tool {
     try {
         $start = Get-Date
         
-        # Add -accepteula for necessary tools (from v2.2 logic)
         if ($ToolName -in @("psinfo","pslist","handle","autorunsc","testlimit","contig","coreinfo","streams","sigcheck")) {
             $Args = "-accepteula $Args"
         }
 
-        # ARG FIX: This ensures the path is quoted to handle spaces (like in C:\Users\Jon Pienkowski)
         $argArray = if ($Args.Trim()) { $Args.Split(' ') | Where-Object { $_ } } else { @() }
-        
-        # *** CRITICAL FIX: Quote the executable path ***
         $rawOutput = & "$toolPath" $argArray 2>&1 | Out-String
-        
         $duration = ((Get-Date) - $start).TotalMilliseconds
-        
         $cleanOutput = Clean-ToolOutput -ToolName $ToolName -RawOutput $rawOutput
 
         $script:TestResults += @{
@@ -220,9 +348,6 @@ function Run-Tool {
         Write-Host "ERROR: $ToolName - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
-# ----------------------------------------------------
-# END UTILITY FUNCTIONS
-# ----------------------------------------------------
 
 # Test: System Info
 function Test-SystemInfo {
@@ -230,7 +355,6 @@ function Test-SystemInfo {
     Run-Tool -ToolName "psinfo" -Args "-h -s -d" -Description "System information"
     Run-Tool -ToolName "clockres" -Description "Clock resolution"
 
-    # Get WMI info and store in System-Overview
     try {
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
         $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
@@ -257,7 +381,6 @@ function Test-CPU {
     Write-Host "`n=== CPU Testing ===" -ForegroundColor Green
     Run-Tool -ToolName "coreinfo" -Args "-v -f -c" -Description "CPU architecture"
 
-    # Get WMI CPU details
     try {
         $cpu = Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1
         $info = @"
@@ -277,11 +400,9 @@ L3 Cache: $($cpu.L3CacheSize) KB
         Write-Host "Error getting CPU details" -ForegroundColor Yellow
     }
 
-    # Run remaining CPU-related tools
     Run-Tool -ToolName "pslist" -Args "-t" -Description "Process tree snapshot"
     Run-Tool -ToolName "handle" -Args "-p explorer" -Description "Explorer handles"
     
-    # CPU stress test
     Write-Host "Running CPU test ($script:CPU_TEST_SECONDS sec - synthetic)..." -ForegroundColor Yellow
     try {
         $start = Get-Date
@@ -303,17 +424,14 @@ L3 Cache: $($cpu.L3CacheSize) KB
     }
 }
 
-# Test: Memory (FIXED)
+# Test: Memory
 function Test-Memory {
     Write-Host "`n=== RAM Testing ===" -ForegroundColor Green
     try {
         $mem = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
         $totalGB = [math]::Round($mem.TotalPhysicalMemory/1GB,2)
-        
-        # FIX: FreePhysicalMemory is in KB, convert to GB correctly
         $availGB = [math]::Round($os.FreePhysicalMemory/1024/1024,2)
-        
         $usedGB = $totalGB - $availGB
         $usage = [math]::Round(($usedGB/$totalGB)*100,1)
 
@@ -357,7 +475,6 @@ function Test-Storage {
 
     Run-Tool -ToolName "du" -Args "-l 2 C:\" -Description "Disk usage C:"
 
-    # Disk performance test
     Write-Host "Running disk test..." -ForegroundColor Yellow
     try {
         $testFile = Join-Path $env:TEMP "disktest_$([guid]::NewGuid().ToString('N')).tmp"
@@ -448,7 +565,7 @@ function Test-OSHealth {
     }
 }
 
-# Test: SMART
+# FIXED: Test-StorageSMART (removed wrong DISM/SFC code)
 function Test-StorageSMART {
     Write-Host "`n=== Storage SMART ===" -ForegroundColor Green
     try {
@@ -461,17 +578,6 @@ function Test-StorageSMART {
         } catch {}
 
         if (-not $lines) { $lines = @("SMART data not available (driver limitation)") }
-
-    Write-Host "Running DISM and SFC (may take 5-15 min)..." -ForegroundColor Yellow
-    try {
-        $start = Get-Date
-        # DISM
-        Write-Host "  Running DISM..." -ForegroundColor Yellow
-        $dismResult = DISM /Online /Cleanup-Image /CheckHealth 2>&1 | Out-String
-        # SFC
-        Write-Host "  Running SFC..." -ForegroundColor Yellow
-        $sfcResult = sfc /scannow 2>&1 | Out-String
-        $duration = ((Get-Date) - $start).TotalMilliseconds
         
         $script:TestResults += @{
             Tool="Storage-SMART"; Description="SMART data"
@@ -483,7 +589,7 @@ function Test-StorageSMART {
     }
 }
 
-# Test: TRIM
+# FIXED: Test-Trim (corrected output message)
 function Test-Trim {
     Write-Host "`n=== SSD TRIM Status ===" -ForegroundColor Green
     try {
@@ -502,7 +608,7 @@ function Test-Trim {
             Tool="SSD-TRIM"; Description="TRIM status"
             Status="SUCCESS"; Output=($txt -join "`n"); Duration=50
         }
-        Write-Host "SMART data collected" -ForegroundColor Green
+        Write-Host "TRIM status collected" -ForegroundColor Green
     } catch {
         Write-Host "TRIM check failed" -ForegroundColor Yellow
     }
@@ -528,11 +634,10 @@ function Test-NIC {
     }
 }
 
-# Test: GPU (Enhanced)
+# Test: GPU
 function Test-GPU {
     Write-Host "`n=== GPU Testing (Enhanced) ===" -ForegroundColor Green
     
-    # Part 1: Detailed WMI/CIM GPU Information
     Write-Host "Gathering GPU details..." -ForegroundColor Yellow
     try {
         $gpus = Get-CimInstance Win32_VideoController -ErrorAction Stop
@@ -576,7 +681,6 @@ function Test-GPU {
         Write-Host "Error getting GPU details: $($_.Exception.Message)" -ForegroundColor Yellow
     }
     
-    # Part 2: Display Configuration
     Write-Host "Analyzing display configuration..." -ForegroundColor Yellow
     try {
         $monitors = Get-CimInstance WmiMonitorID -Namespace root\wmi -ErrorAction Stop
@@ -590,19 +694,16 @@ function Test-GPU {
             $displayInfo += "Display #$index"
             $displayInfo += "-" * 40
             
-            # Decode manufacturer name
             if ($monitor.ManufacturerName) {
                 $mfg = [System.Text.Encoding]::ASCII.GetString($monitor.ManufacturerName -ne 0)
                 $displayInfo += "Manufacturer: $mfg"
             }
             
-            # Decode product name
             if ($monitor.UserFriendlyName) {
                 $name = [System.Text.Encoding]::ASCII.GetString($monitor.UserFriendlyName -ne 0)
                 $displayInfo += "Model: $name"
             }
             
-            # Decode serial number
             if ($monitor.SerialNumberID) {
                 $serial = [System.Text.Encoding]::ASCII.GetString($monitor.SerialNumberID -ne 0)
                 $displayInfo += "Serial: $serial"
@@ -622,7 +723,6 @@ function Test-GPU {
         Write-Host "Display configuration unavailable" -ForegroundColor Yellow
     }
     
-    # Part 3: GPU Driver Details (Enhanced)
     Write-Host "Checking GPU drivers..." -ForegroundColor Yellow
     try {
         $drivers = Get-CimInstance Win32_PnPSignedDriver -ErrorAction Stop | 
@@ -648,7 +748,6 @@ function Test-GPU {
         Write-Host "Driver details unavailable" -ForegroundColor Yellow
     }
     
-    # Part 4: DirectX Diagnostics (Enhanced)
     Write-Host "Running DirectX diagnostics..." -ForegroundColor Yellow
     $dxProcess = $null
     try {
@@ -668,15 +767,12 @@ function Test-GPU {
             $raw = Get-Content $dx -Raw -ErrorAction Stop
             Remove-Item $dx -ErrorAction SilentlyContinue
             
-            # Extract more detailed info
             $dxInfo = @()
             
-            # DirectX version
             if ($raw -match "DirectX Version: (.+)") {
                 $dxInfo += "DirectX Version: $($matches[1])"
             }
             
-            # Display devices section
             $lines = $raw -split "`r?`n"
             $inDisplaySection = $false
             $displayLines = @()
@@ -717,7 +813,6 @@ function Test-GPU {
         }
     }
     
-    # Part 5: OpenGL Information
     Write-Host "Checking OpenGL support..." -ForegroundColor Yellow
     try {
         $openglInfo = @()
@@ -744,25 +839,21 @@ function Test-GPU {
         Write-Host "OpenGL check skipped" -ForegroundColor DarkGray
     }
     
-    # Part 6: GPU Performance Capabilities
     Write-Host "Checking GPU capabilities..." -ForegroundColor Yellow
     try {
         $capabilities = @()
         
-        # Check for hardware acceleration
         $dwm = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\Dwm" -ErrorAction SilentlyContinue
         if ($dwm) {
             $capabilities += "DWM Composition: Enabled"
         }
         
-        # Check for GPU scheduling
         $gpuScheduling = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" -ErrorAction SilentlyContinue
         if ($gpuScheduling.HwSchMode) {
             $schedStatus = if ($gpuScheduling.HwSchMode -eq 2) { "Enabled" } else { "Disabled" }
             $capabilities += "Hardware-Accelerated GPU Scheduling: $schedStatus"
         }
         
-        # Check DirectX feature levels
         $gpus = Get-CimInstance Win32_VideoController
         foreach ($gpu in $gpus) {
             if ($gpu.Name) {
@@ -791,11 +882,10 @@ function Test-GPU {
     }
 }
 
-# Test: Vendor-Specific GPU Testing (NVIDIA/AMD)
+# FIXED: Test-GPUVendorSpecific (AMD detection now checks all registry keys)
 function Test-GPUVendorSpecific {
     Write-Host "`n=== Vendor-Specific GPU Testing ===" -ForegroundColor Green
     
-    # Check for NVIDIA
     try {
         $nvidiaSmi = "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
         if (Test-Path $nvidiaSmi) {
@@ -810,7 +900,6 @@ function Test-GPUVendorSpecific {
             
             Write-Host "NVIDIA metrics collected" -ForegroundColor Green
             
-            # Get more detailed info
             $detailedOutput = & $nvidiaSmi -q 2>&1 | Out-String
             
             $script:TestResults += @{
@@ -829,35 +918,48 @@ function Test-GPUVendorSpecific {
         Write-Host "NVIDIA test failed: $($_.Exception.Message)" -ForegroundColor Yellow
     }
     
-    # Check for AMD
     try {
-        $amdRegistry = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000"
+        $videoControllerPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
         
-        if (Test-Path $amdRegistry) {
-            $amdInfo = Get-ItemProperty $amdRegistry -ErrorAction Stop
-            
+        if (Test-Path $videoControllerPath) {
+            $amdFound = $false
             $amdOutput = @()
-            $amdOutput += "AMD GPU Detected"
-            $amdOutput += "Driver Description: $($amdInfo.DriverDesc)"
-            $amdOutput += "Driver Version: $($amdInfo.DriverVersion)"
-            $amdOutput += "Driver Date: $($amdInfo.DriverDate)"
+            $amdOutput += "AMD GPU Detection Results:"
+            $amdOutput += ""
             
-            if ($amdInfo.DriverDesc -match "AMD|Radeon") {
+            Get-ChildItem $videoControllerPath -ErrorAction Stop | ForEach-Object {
+                try {
+                    $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                    if ($props.DriverDesc -match "AMD|Radeon") {
+                        $amdFound = $true
+                        $amdOutput += "Device Found:"
+                        $amdOutput += "  Driver Description: $($props.DriverDesc)"
+                        $amdOutput += "  Driver Version: $($props.DriverVersion)"
+                        $amdOutput += "  Driver Date: $($props.DriverDate)"
+                        $amdOutput += "  Registry Key: $($_.PSChildName)"
+                        $amdOutput += ""
+                    }
+                } catch {}
+            }
+            
+            if ($amdFound) {
                 $script:TestResults += @{
                     Tool="AMD-GPU"; Description="AMD GPU information"
                     Status="SUCCESS"; Output=($amdOutput -join "`n"); Duration=100
                 }
                 Write-Host "AMD GPU information collected" -ForegroundColor Green
+            } else {
+                Write-Host "AMD GPU not detected" -ForegroundColor DarkGray
+                $script:TestResults += @{
+                    Tool="AMD-GPU"; Description="AMD GPU information"
+                    Status="SKIPPED"; Output="No AMD GPU detected in registry"; Duration=0
+                }
             }
         } else {
-            Write-Host "AMD GPU not detected" -ForegroundColor DarkGray
-            $script:TestResults += @{
-                Tool="AMD-GPU"; Description="AMD GPU information"
-                Status="SKIPPED"; Output="No AMD GPU detected"; Duration=0
-            }
+            Write-Host "Video controller registry path not found" -ForegroundColor DarkGray
         }
     } catch {
-        Write-Host "AMD GPU check unavailable" -ForegroundColor DarkGray
+        Write-Host "AMD GPU check error: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 }
 
@@ -873,7 +975,6 @@ function Test-GPUMemory {
             
             Write-Host "Testing $($gpu.Name) - $totalRAM GB VRAM" -ForegroundColor Yellow
             
-            # Get current usage via performance counters (if available)
             try {
                 $perfCounters = Get-Counter -Counter "\GPU Engine(*)\Running Time" -ErrorAction Stop
                 
@@ -889,7 +990,6 @@ function Test-GPUMemory {
                 
                 Write-Host "GPU memory test complete" -ForegroundColor Green
             } catch {
-                # Fallback to basic info
                 $usage = @()
                 $usage += "GPU: $($gpu.Name)"
                 $usage += "Total VRAM: $totalRAM GB"
@@ -972,10 +1072,13 @@ function Test-HardwareEvents {
     }
 }
 
-# Test: Windows Update
+# FIXED: Test-WindowsUpdate (improved COM cleanup)
 function Test-WindowsUpdate {
     Write-Host "`n=== Windows Update ===" -ForegroundColor Green
     $updateSession = $null
+    $searcher = $null
+    $result = $null
+    
     try {
         $lines = @()
         try {
@@ -1004,19 +1107,25 @@ function Test-WindowsUpdate {
     } catch {
         Write-Host "Windows Update check failed" -ForegroundColor Yellow
     } finally {
+        if ($result) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($result) | Out-Null } catch {}
+        }
+        if ($searcher) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($searcher) | Out-Null } catch {}
+        }
         if ($updateSession) {
             try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null } catch {}
         }
         [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+        [System.GC]::Collect()
     }
 }
 
-# Generate Dual Reports (Clean + Detailed) - ENHANCED VERSION
-# Replace the entire Generate-Report function in SystemTester.ps1 (around line 1260)
+# Generate Reports
 function Generate-Report {
     Write-Host "`nGenerating reports..." -ForegroundColor Cyan
 
-    # Test write access
     $testFile = Join-Path $ScriptRoot "writetest_$([guid]::NewGuid().ToString('N')).tmp"
     try {
         "test" | Out-File -FilePath $testFile -ErrorAction Stop
@@ -1030,14 +1139,12 @@ function Generate-Report {
     $cleanPath = Join-Path $ScriptRoot "SystemTest_Clean_$timestamp.txt"
     $detailedPath = Join-Path $ScriptRoot "SystemTest_Detailed_$timestamp.txt"
 
-    # Calculate stats
     $success = ($TestResults | Where-Object {$_.Status -eq "SUCCESS"}).Count
     $failed = ($TestResults | Where-Object {$_.Status -eq "FAILED"}).Count
     $skipped = ($TestResults | Where-Object {$_.Status -eq "SKIPPED"}).Count
     $total = $TestResults.Count
     $successRate = if ($total -gt 0) { [math]::Round(($success/$total)*100,1) } else { 0 }
 
-    # === CLEAN REPORT ===
     $cleanReport = @()
     $cleanReport += "========================================="
     $cleanReport += "  SYSTEM TEST REPORT v$script:VERSION"
@@ -1059,7 +1166,6 @@ function Generate-Report {
     $cleanReport += "KEY FINDINGS:"
     $cleanReport += "-------------"
     
-    # Extract key info from results
     $sysInfo = $TestResults | Where-Object {$_.Tool -eq "System-Overview"}
     if ($sysInfo) {
         $cleanReport += ""
@@ -1085,26 +1191,21 @@ function Generate-Report {
     if ($gpuDetails -and $gpuDetails.Output -match "GPU #1") {
         $cleanReport += ""
         $cleanReport += "GPU:"
-        # Extract just the first GPU's name
         $gpuLines = $gpuDetails.Output -split "`n"
         foreach ($line in $gpuLines) {
             if ($line -match "Name:|Adapter RAM:|Driver Version:") {
                 $cleanReport += "  $line"
             }
-            if ($line -match "GPU #2") { break }  # Stop at second GPU
+            if ($line -match "GPU #2") { break }
         }
     }
 
-    # ========================================
-    # ENHANCED RECOMMENDATIONS ENGINE
-    # ========================================
     $cleanReport += ""
     $cleanReport += "RECOMMENDATIONS:"
     $cleanReport += "----------------"
 
     $recommendations = @()
 
-    # === MEMORY ANALYSIS ===
     if ($ramInfo -and $ramInfo.Output -match "Usage: ([\d\.]+)%") {
         $usage = [float]$matches[1]
         if ($usage -gt 85) {
@@ -1120,13 +1221,7 @@ function Generate-Report {
             $recommendations += "• GOOD: Low memory usage ($usage%) - plenty of RAM available"
         }
     }
-    
-    # --- 5. RECOMMENDATIONS ENGINE ---
-    $cleanReport += ""
-    $cleanReport += "RECOMMENDATIONS:"
-    $cleanReport += "----------------"
 
-    # === STORAGE HEALTH ===
     $smartInfo = $TestResults | Where-Object {$_.Tool -eq "Storage-SMART"}
     if ($smartInfo -and $smartInfo.Output -notmatch "not available") {
         if ($smartInfo.Output -match "Warning|Caution|Failed|Degraded") {
@@ -1137,12 +1232,10 @@ function Generate-Report {
         }
     }
 
-    # === STORAGE PERFORMANCE ===
     if ($diskPerf -and $diskPerf.Output -match "Write: ([\d\.]+) MB/s.*Read: ([\d\.]+) MB/s") {
         $writeSpeed = [float]$matches[1]
         $readSpeed = [float]$matches[2]
         
-        # HDD typical: 80-160 MB/s, SSD typical: 200-550 MB/s (SATA), NVMe: 1500+ MB/s
         if ($writeSpeed -lt 50 -or $readSpeed -lt 50) {
             $recommendations += "• WARNING: Very slow disk performance detected"
             $recommendations += "  → Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
@@ -1157,7 +1250,6 @@ function Generate-Report {
         }
     }
 
-    # === STORAGE CAPACITY ===
     $storageInfo = $TestResults | Where-Object {$_.Tool -eq "Storage-Overview"}
     if ($storageInfo) {
         $drives = $storageInfo.Output -split "`n" | Where-Object {$_ -match "([A-Z]:).*\((\d+)%\)"}
@@ -1181,7 +1273,6 @@ function Generate-Report {
         }
     }
 
-    # === SSD TRIM STATUS ===
     $trimInfo = $TestResults | Where-Object {$_.Tool -eq "SSD-TRIM"}
     if ($trimInfo -and $trimInfo.Output -match "Disabled") {
         $recommendations += "• WARNING: TRIM is disabled for SSD"
@@ -1189,7 +1280,6 @@ function Generate-Report {
         $recommendations += "  → TRIM maintains SSD performance and longevity"
     }
 
-    # === NETWORK PERFORMANCE ===
     $nicInfo = $TestResults | Where-Object {$_.Tool -eq "NIC-Info"}
     if ($nicInfo) {
         if ($nicInfo.Output -match "10 Mbps|100 Mbps") {
@@ -1206,7 +1296,6 @@ function Generate-Report {
         }
     }
 
-    # === WINDOWS UPDATE ===
     $updateInfo = $TestResults | Where-Object {$_.Tool -eq "Windows-Update"}
     if ($updateInfo) {
         if ($updateInfo.Output -match "Pending: (\d+)") {
@@ -1231,7 +1320,6 @@ function Generate-Report {
         }
     }
 
-    # === OS HEALTH (DISM/SFC) ===
     $osHealth = $TestResults | Where-Object {$_.Tool -eq "OS-Health"}
     if ($osHealth -and $osHealth.Status -eq "SUCCESS") {
         if ($osHealth.Output -match "corrupt|error|repairable") {
@@ -1242,7 +1330,6 @@ function Generate-Report {
         }
     }
 
-    # === HARDWARE ERRORS (WHEA) ===
     $wheaInfo = $TestResults | Where-Object {$_.Tool -eq "WHEA"}
     if ($wheaInfo -and $wheaInfo.Output -notmatch "No WHEA errors") {
         $recommendations += "• WARNING: Hardware errors detected in event log"
@@ -1252,7 +1339,6 @@ function Generate-Report {
         $recommendations += "  → Check for overheating issues"
     }
 
-    # === CPU PERFORMANCE ===
     $cpuPerf = $TestResults | Where-Object {$_.Tool -eq "CPU-Performance"}
     if ($cpuPerf -and $cpuPerf.Output -match "Ops/sec: (\d+)") {
         $opsPerSec = [int]$matches[1]
@@ -1265,21 +1351,22 @@ function Generate-Report {
         }
     }
 
-    # === GPU HEALTH ===
+    # FIXED: Added try/catch for GPU driver year parsing
     if ($gpuDetails) {
         if ($gpuDetails.Output -match "Driver Date:.*(\d{4})") {
-            $driverYear = [int]$matches[1]
-            $currentYear = (Get-Date).Year
-            if ($currentYear - $driverYear -gt 1) {
-                $recommendations += "• INFO: GPU drivers are over 1 year old"
-                $recommendations += "  → Update to latest drivers for best performance"
-                $recommendations += "  → NVIDIA: GeForce Experience or nvidia.com"
-                $recommendations += "  → AMD: amd.com/en/support"
-            }
+            try {
+                $driverYear = [int]$matches[1]
+                $currentYear = (Get-Date).Year
+                if ($currentYear - $driverYear -gt 1) {
+                    $recommendations += "• INFO: GPU drivers are over 1 year old ($driverYear)"
+                    $recommendations += "  → Update to latest drivers for best performance"
+                    $recommendations += "  → NVIDIA: GeForce Experience or nvidia.com"
+                    $recommendations += "  → AMD: amd.com/en/support"
+                }
+            } catch {}
         }
     }
 
-    # === BATTERY HEALTH (Laptops) ===
     $powerInfo = $TestResults | Where-Object {$_.Tool -eq "Power-Energy"}
     if ($powerInfo -and $powerInfo.Output -match "Battery") {
         if ($powerInfo.Output -match "energy-report.html") {
@@ -1288,7 +1375,6 @@ function Generate-Report {
         }
     }
 
-    # === OVERALL SYSTEM HEALTH ===
     if ($failed -gt 5) {
         $recommendations += "• CRITICAL: Multiple test failures ($failed failures)"
         $recommendations += "  → Review detailed report for specific issues"
@@ -1303,7 +1389,6 @@ function Generate-Report {
         $recommendations += "  → Run as administrator for complete diagnostics"
     }
 
-    # === GENERAL MAINTENANCE ===
     if ($recommendations.Count -lt 3) {
         $recommendations += ""
         $recommendations += "GENERAL MAINTENANCE TIPS:"
@@ -1314,7 +1399,6 @@ function Generate-Report {
         $recommendations += "• Back up important data regularly"
     }
 
-    # Add all recommendations to report
     foreach ($rec in $recommendations) {
         $cleanReport += $rec
     }
@@ -1323,7 +1407,6 @@ function Generate-Report {
     $cleanReport += "For detailed output, see: $detailedPath"
     $cleanReport += ""
 
-    # === DETAILED REPORT ===
     $detailedReport = @()
     $detailedReport += "========================================="
     $detailedReport += "  SYSTEM TEST REPORT v$script:VERSION"
@@ -1354,7 +1437,6 @@ function Generate-Report {
         $detailedReport += "-" * 80
     }
 
-    # Save reports
     try {
         $cleanReport | Out-File -FilePath $cleanPath -Encoding UTF8
         $detailedReport | Out-File -FilePath $detailedPath -Encoding UTF8
@@ -1437,24 +1519,20 @@ function Start-Menu {
             "10" { Test-Trim; Read-Host "`nPress Enter" }
             "11" { Test-NIC; Read-Host "`nPress Enter" }
             "12" { 
-                # Run all GPU tests when "12" is selected
                 Test-GPU
                 Test-GPUVendorSpecific
                 Test-GPUMemory
                 Read-Host "`nPress Enter" 
             }
             "12a" { 
-                # Basic GPU info only
                 Test-GPU
                 Read-Host "`nPress Enter" 
             }
             "12b" { 
-                # Vendor-specific only
                 Test-GPUVendorSpecific
                 Read-Host "`nPress Enter" 
             }
             "12c" { 
-                # GPU memory test only
                 Test-GPUMemory
                 Read-Host "`nPress Enter" 
             }
@@ -1466,7 +1544,7 @@ function Start-Menu {
                 Test-SystemInfo; Test-CPU; Test-Memory; Test-Storage
                 Test-Processes; Test-Security; Test-Network; Test-OSHealth
                 Test-StorageSMART; Test-Trim; Test-NIC
-                Test-GPU; Test-GPUVendorSpecific; Test-GPUMemory  # All GPU tests
+                Test-GPU; Test-GPUVendorSpecific; Test-GPUMemory
                 Test-Power; Test-HardwareEvents; Test-WindowsUpdate
                 Write-Host "`nAll tests complete!" -ForegroundColor Green
                 Read-Host "Press Enter"
@@ -1480,7 +1558,7 @@ function Start-Menu {
     } while ($choice -ne "Q" -and $choice -ne "q")
 }
 
-# Main - only execute if script is run directly (not dot-sourced)
+# Main
 if ($MyInvocation.InvocationName -ne '.') {
     try {
         Write-Host "Starting Sysinternals Tester v$script:VERSION..." -ForegroundColor Green
