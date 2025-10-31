@@ -5,7 +5,7 @@
 param([switch]$AutoRun)
 
 # Constants
-$script:VERSION = "2.2"
+$script:VERSION = "2.21"
 $script:DXDIAG_TIMEOUT = 45
 $script:ENERGY_DURATION = 15
 $script:CPU_TEST_SECONDS = 10
