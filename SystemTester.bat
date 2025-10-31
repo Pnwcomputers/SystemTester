@@ -9,7 +9,6 @@ setlocal enableextensions enabledelayedexpansion
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
-REM ^-- Minimum expected ZIP size (~10MB) for validation
 set "DOWNLOAD_TIMEOUT_SEC=120"
 set "SCRIPT_VERSION=2.2"
 
@@ -78,7 +77,7 @@ set "DRIVE_LETTER=%~d0"
 set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
 
 :: Check path length
-for /f %%i in ('powershell -NoProfile -Command "[int](Get-Item '%~dp0').FullName.Length" 2^>nul') do set "PATH_LENGTH=%%i"
+for /f %%i in ('powershell -NoProfile -Command "('%SCRIPT_DIR%').Length" 2^>nul') do set "PATH_LENGTH=%%i"
 if "%PATH_LENGTH%"=="" set "PATH_LENGTH=0"
 if %PATH_LENGTH% GTR 200 (
     echo [WARNING] Path is %PATH_LENGTH% chars. Move to shorter path if errors occur.
@@ -112,21 +111,12 @@ if "%PS_VERSION%"=="" (
 echo PowerShell version: %PS_VERSION%
 echo.
 
-:: Check for Sysinternals folder (FIXED: Removed duplicate)
+:: Check for Sysinternals folder
 if not exist "%SCRIPT_DIR%\Sysinternals" (
     echo [WARNING] Sysinternals folder not found!
     echo Use Menu Option 5 to download automatically.
     echo.
     timeout /t 2 >nul
-) else (
-    :: Check for PSPing specifically (for network speed tests)
-    if exist "%SCRIPT_DIR%\Sysinternals\psping.exe" (
-        echo [INFO] PSPing detected - Full network speed tests available
-    ) else (
-        echo [INFO] PSPing not found - Basic network tests only
-        echo       Download Sysinternals Suite for full network testing
-    )
-    echo.
 )
 
 :MENU
@@ -213,11 +203,6 @@ echo ========================================================
 echo          FIXING POWERSHELL EXECUTION POLICY
 echo ========================================================
 echo.
-echo ABOUT EXECUTION POLICY:
-echo RemoteSigned allows local scripts to run without signing,
-echo but requires downloaded scripts to be digitally signed.
-echo This is a good balance of security and functionality.
-echo.
 echo Current policy:
 powershell -NoProfile -Command "Get-ExecutionPolicy -List | Format-Table -AutoSize"
 echo.
@@ -256,8 +241,6 @@ set "DOWNLOAD_URL=https://download.sysinternals.com/files/SysinternalsSuite.zip"
 
 echo This will download ~35MB from Microsoft.
 echo Target: %SYSINT_DIR%
-echo.
-echo NOTE: Includes PSPing for advanced network speed testing
 echo.
 set /p "confirm=Proceed? (Y/N): "
 if /i not "%confirm%"=="Y" goto MENU
@@ -300,15 +283,6 @@ set "TOOL_COUNT=0"
 for %%F in ("%SYSINT_DIR%\*.exe") do set /a TOOL_COUNT+=1
 echo [SUCCESS] %TOOL_COUNT% tools installed in %SYSINT_DIR%
 echo.
-
-:: Check specifically for PSPing
-if exist "%SYSINT_DIR%\psping.exe" (
-    echo [SUCCESS] PSPing installed - Network speed tests enabled!
-) else (
-    echo [WARNING] PSPing not found - Basic network tests only
-)
-
-echo.
 echo TIP: Use Menu Option 4 to verify tool integrity
 echo.
 pause
@@ -339,15 +313,8 @@ echo.
 echo --------------------------------------------------------
 echo INSTALLED TOOLS:
 echo --------------------------------------------------------
-
-:: Check GPU-Z with size validation
 if exist "%GPUZ_PATH%" (
-    for %%A in ("%GPUZ_PATH%") do set "GPUZ_SIZE=%%~zA"
-    if !GPUZ_SIZE! GTR 1000000 (
-        echo [OK] GPU-Z.exe - Installed ^(!GPUZ_SIZE! bytes^)
-    ) else (
-        echo [!] GPU-Z.exe - File exists but seems corrupted ^(!GPUZ_SIZE! bytes^)
-    )
+    echo [OK] GPU-Z.exe - Installed
 ) else (
     echo [ ] GPU-Z.exe - Not installed
 )
@@ -358,16 +325,12 @@ if exist "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe" (
     echo [ ] NVIDIA-SMI - Not installed ^(NVIDIA GPU drivers^)
 )
 
-:: Check for AMD tools (FIXED: Check multiple registry keys)
+:: Check for AMD tools
 set "AMD_FOUND="
-for /f "tokens=*" %%K in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" /s 2^>nul ^| find "HKEY_"') do (
-    reg query "%%K" /v DriverDesc 2>nul | find /i "AMD" >nul 2>&1
-    if not errorlevel 1 (
-        set "AMD_FOUND=YES"
-        goto :AMD_FOUND
-    )
+for %%R in ("HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000") do (
+    reg query %%R /v DriverDesc 2>nul | find /i "AMD" >nul 2>&1
+    if not errorlevel 1 set "AMD_FOUND=YES"
 )
-:AMD_FOUND
 if defined AMD_FOUND (
     echo [OK] AMD GPU Drivers - Installed
 ) else (
@@ -398,14 +361,7 @@ if exist "%GPUZ_PATH%" (
     echo GPU-Z is already installed at:
     echo %GPUZ_PATH%
     echo.
-    for %%A in ("%GPUZ_PATH%") do (
-        set "GPUZ_SIZE=%%~zA"
-        echo Size: !GPUZ_SIZE! bytes
-        if !GPUZ_SIZE! LSS 1000000 (
-            echo [WARNING] File seems too small. May be corrupted.
-            echo           Re-download if GPU-Z doesn't work properly.
-        )
-    )
+    for %%A in ("%GPUZ_PATH%") do echo Size: %%~zA bytes
     echo.
     set /p "run_gpuz=Run GPU-Z now? (Y/N): "
     if /i "!run_gpuz!"=="Y" (
@@ -465,6 +421,7 @@ echo ========================================================
 echo.
 
 set "NVIDIA_SMI=C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+set "NVIDIA_DRIVERS=C:\Program Files\NVIDIA Corporation"
 
 if exist "%NVIDIA_SMI%" (
     echo [OK] NVIDIA System Management Interface found
@@ -508,35 +465,22 @@ echo             AMD TOOLS VERIFICATION
 echo ========================================================
 echo.
 
-:: Check for AMD GPU (FIXED: Check all registry subkeys)
+:: Check for AMD GPU
 set "AMD_FOUND="
 set "AMD_NAME="
-set "AMD_DRIVER_VERSION="
-set "AMD_DRIVER_DATE="
-
-for /f "tokens=*" %%K in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" /s 2^>nul ^| find "HKEY_"') do (
-    for /f "tokens=2*" %%a in ('reg query "%%K" /v DriverDesc 2^>nul ^| find "DriverDesc"') do (
-        echo %%b | find /i "AMD" >nul 2>&1
-        if not errorlevel 1 (
-            set "AMD_FOUND=YES"
-            set "AMD_NAME=%%b"
-            
-            :: Get driver version and date
-            for /f "tokens=2*" %%v in ('reg query "%%K" /v DriverVersion 2^>nul ^| find "DriverVersion"') do set "AMD_DRIVER_VERSION=%%w"
-            for /f "tokens=2*" %%d in ('reg query "%%K" /v DriverDate 2^>nul ^| find "DriverDate"') do set "AMD_DRIVER_DATE=%%d"
-            goto :AMD_INFO_FOUND
-        )
-    )
+for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000" /v DriverDesc 2^>nul ^| find "DriverDesc"') do (
+    set "AMD_NAME=%%b"
+    echo %%b | find /i "AMD" >nul 2>&1
+    if not errorlevel 1 set "AMD_FOUND=YES"
 )
 
-:AMD_INFO_FOUND
 if defined AMD_FOUND (
     echo [OK] AMD GPU Detected: %AMD_NAME%
     echo.
     echo AMD Driver Information:
     echo ========================================================
-    if defined AMD_DRIVER_VERSION echo Driver Version: %AMD_DRIVER_VERSION%
-    if defined AMD_DRIVER_DATE echo Driver Date: %AMD_DRIVER_DATE%
+    reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000" /v DriverVersion 2>nul
+    reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000" /v DriverDate 2>nul
     echo ========================================================
     echo.
     echo NOTE: AMD doesn't provide a command-line tool like
@@ -630,13 +574,8 @@ echo.
 echo - Stress tests generate SIGNIFICANT HEAT
 echo - Monitor temperatures during tests
 echo - Ensure adequate cooling
-echo - Safe temps vary by GPU model - check manufacturer specs
-echo - General guidance: Stop if over 85C ^(many GPUs^)
-echo - Some AMD GPUs safe to 110C junction temperature
+echo - Stop if temps exceed 85C (GPU) / 95C (hotspot)
 echo - Laptop users: Use caution with stress tests
-echo.
-echo ALWAYS check your specific GPU's safe temperature range
-echo from the manufacturer before stress testing!
 echo.
 echo ========================================================
 echo.
@@ -656,7 +595,6 @@ echo   - Fixed memory usage calculation bug
 echo   - Launcher awareness detection
 echo   - Enhanced GPU testing with vendor-specific tools
 echo   - GPU Tools Manager (Menu Option 6)
-echo   - Improved AMD GPU detection for multi-GPU systems
 echo.
 echo --------------------------------------------------------
 echo COMMON ISSUES:
@@ -679,46 +617,28 @@ echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
 echo    Extract to: %SCRIPT_DIR%\Sysinternals\
 echo.
 echo 5. MEMORY SHOWS 100%% (but Task Manager shows less)
-echo    This was a bug in earlier versions - FIXED in v2.1+
+echo    This was a bug in v2.08 - FIXED in v2.2
 echo.
-echo 6. NETWORK SPEED TESTS LIMITED
-echo    Cause: PSPing.exe not found
-echo    Solution: Download Sysinternals Suite (Option 5)
-echo    PSPing enables: Bandwidth testing, TCP latency
-echo.
-echo 7. TESTS TAKE TOO LONG
+echo 6. TESTS TAKE TOO LONG
 echo    Expected durations:
 echo    - CPU Test: 10 seconds
-echo    - Network Speed: 30-60 seconds
 echo    - Energy Report: 15 seconds
 echo    - Windows Update: 30-90 seconds
 echo    - DISM/SFC: 5-15 minutes each
 echo.
-echo 8. REPORTS NOT GENERATED
+echo 7. REPORTS NOT GENERATED
 echo    - Check write permissions
 echo    - Ensure tests completed
 echo    - Look for SystemTest_Clean_*.txt
 echo.
-echo 9. PATH TOO LONG
+echo 8. PATH TOO LONG
 echo    Current: %PATH_LENGTH% characters
 echo    Limit: 260 characters
 echo    Solution: Move to C:\SysTest\
 echo.
-echo 10. AMD GPU NOT DETECTED
-echo     - Script now checks ALL registry subkeys
-echo     - Update AMD drivers if still not found
-echo.
 echo --------------------------------------------------------
 echo FEATURES:
 echo --------------------------------------------------------
-echo.
-echo NETWORK SPEED TESTING:
-echo   - Gateway connectivity tests
-echo   - Internet endpoint testing (Google, Cloudflare, MS)
-echo   - Latency measurements to multiple servers
-echo   - PSPing bandwidth capacity testing
-echo   - DNS resolution speed testing
-echo   - MTU path discovery
 echo.
 echo REPORT TYPES:
 echo   Clean Report - Summary with key findings
@@ -728,6 +648,12 @@ echo TOOL VERIFICATION:
 echo   Checks digital signatures of all tools
 echo   Validates file sizes
 echo   Identifies Microsoft-signed vs others
+echo.
+echo GPU TESTING:
+echo   Enhanced multi-GPU support
+echo   NVIDIA-SMI integration
+echo   AMD driver detection
+echo   GPU-Z download assistant
 echo.
 echo ADMIN DETECTION:
 echo   Auto-elevates on startup
@@ -743,7 +669,7 @@ goto MENU
 :EXIT
 echo.
 echo ========================================================
-echo Thank you for using Portable Sysinternals System Tester!
+echo Thank you for using PNW Computers' Portable Sysinternals System Tester!
 echo                    Version %SCRIPT_VERSION%
 echo ========================================================
 echo.
