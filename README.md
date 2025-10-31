@@ -1,5 +1,12 @@
 # 🧰 Portable Sysinternals System Tester v2.2 (FIXED)
 
+![Automation Level](https://img.shields.io/badge/Automation-Zero%20Touch-green)
+![Windows Support](https://img.shields.io/badge/Windows-10%20%7C%2011-blue)
+![PowerShell Version](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
+![Enterprise Ready](https://img.shields.io/badge/Enterprise-Ready-purple)
+![GitHub issues](https://img.shields.io/github/issues/Pnwcomputers/SystemTester)
+![Maintenance](https://img.shields.io/badge/Maintained-Yes-green)
+
 **Thumb-drive friendly, no-install Windows hardware health check toolkit** powered by **Sysinternals** and **PowerShell**.
 
 A zero-dependency **PowerShell solution** that runs a comprehensive, curated set of Sysinternals and Windows diagnostic tools. It then processes the raw data to produce two essential reports: a **Clean Summary Report** (human-readable, de-noised, with recommendations) and a **Detailed Report** (cleaned tool outputs).
@@ -543,7 +550,6 @@ For security vulnerabilities or sensitive findings:
 - ✅ Fixed memory leak in Windows Update test
 
 ### v2.2 (Original) - January 2025
-- ⚠️ Known issues - use FIXED version instead
 - Added GPU testing enhancements
 - Added tool integrity verification
 - Added dual report system
@@ -560,6 +566,22 @@ For security vulnerabilities or sensitive findings:
 
 ---
 
+## 📊 Statistics
+
+![GitHub stars](https://img.shields.io/github/stars/Pnwcomputers/SystemTester)
+![GitHub forks](https://img.shields.io/github/forks/Pnwcomputers/SystemTester)
+![GitHub issues](https://img.shields.io/github/issues/Pnwcomputers/SystemTester)
+![GitHub license](https://img.shields.io/github/license/Pnwcomputers/SystemTester)
+
+**🎯 Transform your Windows deployment process from hours to minutes!**
+
+Built with ❤️ for efficiency, reliability, and zero-touch automation.
+
+[⭐ Star this repo](https://github.com/Pnwcomputers/SystemTester) if it saved you time and effort!
+
+---
+
+*Tested on Windows 10 (1909+) and Windows 11 - Enterprise, Pro, and Home editions*
 **Last Updated:** January 2025 | **Version:** 2.2 (FIXED) | **Status:** Production Ready
 
 **⚠️ IMPORTANT:** Always use the `_FIXED` versions of the files for proper operation.
