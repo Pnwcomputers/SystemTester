@@ -55,6 +55,9 @@ if errorlevel 1 (
     echo [ERROR] Failed to elevate. Run manually as administrator.
     pause
 )
+echo.
+echo Press any key to close this window. The elevated window should now be open.
+pause >nul
 exit /b
 
 :ADMIN_CONFIRMED
@@ -717,5 +720,5 @@ echo   - SystemTest_Clean_*.txt (summary)
 echo   - SystemTest_Detailed_*.txt (full output)
 echo   - energy-report.html (if power test ran)
 echo.
-timeout /t 2 >nul
+pause
 exit /b 0
