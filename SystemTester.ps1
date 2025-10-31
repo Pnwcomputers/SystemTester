@@ -1811,10 +1811,11 @@ if ($MyInvocation.InvocationName -ne '.') {
     try {
         Write-Host "Starting Sysinternals Tester v$script:VERSION..." -ForegroundColor Green
 
-        if (!(Initialize-Environment)) {
-            Write-Host "`nSetup required." -ForegroundColor Red
-            Read-Host "Press Enter to exit"
-            exit 1
+        $envReady = Initialize-Environment
+        if (!$envReady) {
+            Write-Host "`nWARNING: Tools missing - limited functionality" -ForegroundColor Yellow
+            Write-Host "Use menu to download Sysinternals tools" -ForegroundColor Yellow
+            Start-Sleep -Seconds 2
         }
 
         if ($AutoRun) {
