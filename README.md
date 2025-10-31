@@ -17,40 +17,29 @@ Version 2.2 introduces a complete **Network Speed Test Suite** (Menu Option 8) f
 
 ### Key New Capabilities:
 
-| Feature | Description |
-| :--- | :--- |
-| **Local Connectivity** | Tests local network, default gateway reachability (`Test-NetConnection`). |
-| **Internet Reachability** | Connectivity tests to multiple endpoints (Google DNS, Cloudflare DNS, Google.com, Microsoft.com). Includes port-specific testing (DNS 53, HTTPS 443). |
-| **Latency Testing** | Detailed ping tests to multiple targets with round-trip time measurements. |
-| **PSPing Integration** | Advanced latency and TCP bandwidth capacity testing for connection quality analysis (requires `psping.exe` in Sysinternals folder). |
-| **DNS Resolution Speed** | Measures DNS lookup speed for multiple domains in milliseconds. |
-| **Network MTU Discovery** | Checks for standard MTU (1500 bytes) without fragmentation to help identify network configuration issues. |
-
----
-
-## ✨ Core Features
-
-| Icon | Feature | Description |
-| :---: | :--- | :--- |
-| 🖱️ | **One-Click Menu or AutoRun** | Use the interactive menu or the `-AutoRun` parameter for unattended, complete system scans. |
-| 📦 | **Fully Portable** | Run entirely from a USB drive with no installation required. |
-| 📥 | **Auto-Download Tools** | Built-in functionality to download the latest Sysinternals Suite directly from Microsoft (no manual setup!). |
-| 🧹 | **Smart Reporting & Cleaning** | Generates timestamped **Clean Summary** and **Detailed TXT** reports. Output cleaner removes EULA, banners, and usage blocks for professional reports. |
-| 🧠 | **Comprehensive Tests** | Covers CPU, RAM, Disk, GPU, **Network**, OS Health, and Windows Update status (15+ categories). |
-| ⚡ | **Modern PowerShell** | Uses **CIM instances** (not deprecated WMI) for better performance and future compatibility. |
-| 🔐 | **Robust Elevation** | SID-based admin check (works on Windows Home) and graceful degradation for missing tools. |
-| 🔍 | **Integrity Verified** | Validates digital signatures and file integrity for all Sysinternals tools. |
-| 🔄 | **Windows Update Check** | Integrates to check pending updates, history, and service status. |
+* 🖱️ **One-click Menu or Autorun** — interactive menu or `-AutoRun` parameter
+* 🧹 **Output Cleaner** — removes banners, EULA text, usage blocks for readable reports
+* 🧠 **Comprehensive Tests** — CPU, RAM, Disk, GPU, Network, OS Health, Windows Update status
+* 🎮 **Enhanced GPU Testing** — Multi-GPU support, NVIDIA/AMD vendor tools, display configuration
+* 🗂️ **Smart Reporting** — timestamped **Summary** + **Detailed** TXT reports with actionable recommendations
+* 📦 **Fully Portable** — run from USB; no installation required
+* 🧰 **Graceful Degradation** — missing tools detected and skipped automatically with helpful messages
+* 🔐 **Robust Elevation Handling** — reliable admin detection (Windows Home compatible)
+* 📥 **Auto-Download Tools** — built-in Sysinternals Suite downloader (no manual setup needed!)
+* 🔄 **Windows Update Integration** — checks pending updates, history, and service status
+* ⚡ **Modern PowerShell** — uses CIM instances (not deprecated WMI) for better performance
+* 🛡️ **Tool Integrity Verification** — digital signature checking for Sysinternals tools
 
 ---
 
 ## 🧩 Requirements
 
-* **OS**: Windows 10/11 (Windows Server supported)
-* **PowerShell**: 5.1+ or PowerShell 7
-* **Permissions**: **Administrator rights recommended** (some key tests require elevation).
-* **Internet**: Only needed for the optional auto-download feature.
-* **Tools**: Sysinternals Tools (auto-downloadable via launcher).
+* **OS:** Windows 10/11 (Windows Server supported)
+* **PowerShell:** 5.1+ or PowerShell 7
+* **Permissions:** Administrator rights recommended (some tests require elevation)
+* **Internet:** Only needed for auto-download feature (optional)
+* **Sysinternals Tools:** Auto-downloadable via launcher or manual installation
+* **GPU Tools (Optional):** NVIDIA drivers (nvidia-smi), AMD drivers, GPU-Z
 
 ---
 
@@ -59,7 +48,7 @@ Version 2.2 introduces a complete **Network Speed Test Suite** (Menu Option 8) f
 ```
 📂 SystemTester/
 ├── 📄 SystemTester.ps1          # Main PowerShell script
-├── 📄 SystemTester_Launcher.bat # Batch launcher (recommended)
+├── 📄 SystemTester.bat          # Batch launcher (recommended)
 ├── 📄 README.md                 # This file
 ├── 📄 LICENSE                   # MIT License
 ├── 📂 Sysinternals/             # Auto-created by launcher
@@ -69,6 +58,8 @@ Version 2.2 introduces a complete **Network Speed Test Suite** (Menu Option 8) f
 │   ├── handle.exe
 │   ├── autorunsc.exe
 │   └── ... (60+ other tools)
+├── 📂 Tools/                    # GPU testing tools (optional)
+│   └── GPU-Z.exe               # Downloaded via Option 6
 └── 📂 Reports/                  # Created when tests run
     ├── SystemTest_Clean_20250103_143022.txt
     └── SystemTest_Detailed_20250103_143022.txt
@@ -80,11 +71,12 @@ Version 2.2 introduces a complete **Network Speed Test Suite** (Menu Option 8) f
 
 ### Option A: Batch Launcher (Recommended)
 
-1.  Download or clone this repository
-2.  Run `SystemTester_Launcher.bat` (will request admin elevation)
-3.  Choose **Option 5** to auto-download Sysinternals Suite (**first time only**)
-4.  Choose **Option 1** for an interactive menu or **Option 2** to run all tests
-5.  Reports are saved in the script directory
+1. Download or clone this repository
+2. Run `SystemTester.bat` (will request admin elevation)
+3. Choose **Option 5** to auto-download Sysinternals Suite (first time only)
+4. Choose **Option 6** to set up GPU testing tools (optional)
+5. Choose **Option 1** for interactive menu or **Option 2** to run all tests
+6. Reports are saved in the script directory
 
 ### Option B: Direct PowerShell
 
@@ -94,20 +86,22 @@ powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1
 
 # Run all tests automatically
 powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun
-
-# Save reports to specific folder (future)
-powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun -OutputPath "E:\Reports"
 ```
 
 ### **First-Time Setup**
 
 If Sysinternals tools are missing:
-1. **Automatic:** Use launcher Menu Option 6 to download (~30-40 MB)
+1. **Automatic:** Use launcher Menu Option 5 to download (~35 MB)
 2. **Manual:** Download from [live.sysinternals.com](https://live.sysinternals.com), extract to `.\Sysinternals\`
+
+For enhanced GPU testing:
+1. **NVIDIA GPUs:** Install latest NVIDIA drivers (includes nvidia-smi)
+2. **AMD GPUs:** Install latest AMD drivers
+3. **GPU-Z (Optional):** Use launcher Menu Option 6 → 1 to download
 
 ---
 
-## 🧪 Test Suites (15 Categories)
+## 🧪 Test Suites (18 Categories)
 
 | # | Category | Description | Key Tools Used |
 |---|----------|-------------|----------------|
@@ -122,7 +116,10 @@ If Sysinternals tools are missing:
 | 9 | **Storage SMART** | Drive health, reliability counters | `Get-PhysicalDisk`, WMI SMART |
 | 10 | **SSD TRIM** | TRIM enablement status | `fsutil` |
 | 11 | **Network Adapters** | Link status, speed, IP addresses | `Get-NetAdapter`, `Get-NetIPConfiguration` |
-| 12 | **GPU/DirectX** | Graphics card info, DirectX version | `dxdiag` |
+| 12 | **GPU (Enhanced)** | Multi-GPU info, vendor tools, memory | CIM, `dxdiag`, `nvidia-smi`, GPU-Z |
+| 12a | **Basic GPU Info** | Details, displays, drivers, DirectX, OpenGL | CIM queries, `dxdiag` |
+| 12b | **Vendor-Specific** | NVIDIA/AMD metrics, temperatures, utilization | `nvidia-smi`, AMD registry |
+| 12c | **GPU Memory** | VRAM capacity, usage, performance counters | CIM, performance counters |
 | 13 | **Power/Battery** | Battery health, energy report | `powercfg`, WMI Battery |
 | 14 | **Hardware Events** | WHEA error logs (last 7 days) | Event Viewer (WHEA-Logger) |
 | 15 | **Windows Update** | Pending updates, history, service status | Windows Update COM API |
@@ -133,70 +130,98 @@ If Sysinternals tools are missing:
 
 ### Clean Summary Report
 ```
----------------------------------
-  SYSTEM TEST REPORT (CLEANED)
----------------------------------
+=========================================
+  SYSTEM TEST REPORT v2.1
+  CLEAN SUMMARY
+=========================================
 Date: 2025-01-03 14:30:22
 Computer: DESKTOP-ABC123
-User: JohnDoe
-Drive: E:
+Admin: YES
 
-EXECUTIVE SUMMARY:
------------------
-Total Tests Run: 28
-Successful: 26
-Failed: 2
-Success Rate: 92.9%
-Total Test Time: 347.2 seconds
+SUMMARY:
+  Total Tests: 32
+  Success: 30
+  Failed: 0
+  Skipped: 2
+  Success Rate: 93.8%
 
 KEY FINDINGS:
 -------------
+
 SYSTEM:
   OS: Microsoft Windows 11 Pro 10.0.22631
-  Total RAM: 16 GB
-  
-CPU PERFORMANCE:
-  Operations/sec: 15847293
+  Architecture: 64-bit
+  Computer: DESKTOP-ABC123
+  Manufacturer: Dell Inc.
+  Model: XPS 15 9520
+  RAM: 32 GB
   
 MEMORY:
-  Total RAM: 16 GB
-  Usage: 62.2%
+  Total RAM: 32 GB
+  Available: 18.5 GB
+  Used: 13.5 GB
+  Usage: 42.2%
   
 DISK PERFORMANCE:
-  Write Speed: 487.3 MB/s
-  Read Speed: 523.1 MB/s
+  Write: 487.3 MB/s
+  Read: 523.1 MB/s
 
-WINDOWS UPDATE: 12 pending updates available
+GPU:
+  Name: NVIDIA GeForce RTX 3060
+  Adapter RAM: 12 GB
+  Driver Version: 31.0.15.4601
 
 RECOMMENDATIONS:
 ----------------
-• WINDOWS UPDATES - 12 updates pending, consider updating soon
-• SYSTEM HEALTH GOOD - No critical issues detected
+• GOOD: Low memory usage (42.2%) - plenty of RAM available
+• INFO: GPU drivers are over 1 year old
+  → Update to latest drivers for best performance
+  → NVIDIA: GeForce Experience or nvidia.com
+• WARNING: 15 pending Windows Updates
+  → Install updates soon for security and stability
+  → Schedule during non-working hours
+• EXCELLENT: All tests passed successfully
+  → System is operating normally
+
+For detailed output, see: SystemTest_Detailed_20250103_143022.txt
 ```
 
 ---
 
 ## 🔧 Launcher Menu Options
 
-The batch launcher (`SystemTester_Launcher.bat`) provides:
+The batch launcher (`SystemTester.bat`) provides:
 
-1. **Run with Interactive Menu** — Select individual tests
+1. **Run Interactive Menu** — Select individual tests (includes GPU sub-options)
 2. **Run ALL Tests Automatically** — Complete system scan with auto-report
 3. **Fix PowerShell Execution Policy** — Set CurrentUser to RemoteSigned
-4. **Verify Sysinternals Tools Installation** — Check what's installed/missing
-5. **Download/Update Sysinternals Suite** — **NEW!** Auto-download from Microsoft
-6. **Show Help / Troubleshooting** — Comprehensive troubleshooting guide
-7. **Exit** — Close launcher
+4. **Verify Tool Integrity** — Check digital signatures and file sizes
+5. **Download/Update Sysinternals Suite** — Auto-download from Microsoft (~35 MB)
+6. **GPU Testing Tools Manager** — **NEW!** Download and manage GPU testing tools
+   - GPU-Z installation assistant
+   - NVIDIA tools verification (nvidia-smi)
+   - AMD driver detection
+   - Tool recommendations (FurMark, 3DMark, etc.)
+7. **Help / Troubleshooting** — Comprehensive troubleshooting guide
+8. **Exit** — Close launcher
+
+### GPU Testing Sub-Menu (PowerShell Option 12)
+
+When you select GPU testing in the PowerShell menu, you can:
+* **12** - Run all GPU tests (comprehensive)
+* **12a** - Basic GPU info only (fastest, ~3-5 seconds)
+* **12b** - Vendor-specific tools (NVIDIA-SMI, AMD)
+* **12c** - GPU memory testing
 
 ---
 
 ## 🛠️ Troubleshooting
 
 ### "Sysinternals tools not found"
-**Solution:** Use launcher Menu Option 6 to auto-download, or manually download from [live.sysinternals.com](https://live.sysinternals.com)
+**Solution:** Use launcher Menu Option 5 to auto-download, or manually download from [live.sysinternals.com](https://live.sysinternals.com)
 
 ### "Execution policy" errors
-**Solution:** Use launcher Menu Option 4, or run: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force`
+**Solution:** Use launcher Menu Option 3, or run: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force`
 
 ### "Access denied" / Permission errors
 **Solution:** Right-click launcher and choose "Run as administrator"
@@ -204,22 +229,31 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 ### Windows Update check fails
 **Solution:** Ensure Windows Update service is running; may require administrator rights
 
+### GPU tests show "SKIPPED"
+**Solution:** 
+- For NVIDIA: Install latest drivers from nvidia.com
+- For AMD: Install latest drivers from amd.com/support
+- nvidia-smi is included with NVIDIA drivers
+- Some GPU tests don't require special tools and should always work
+
 ### Tests taking too long
 **Expected:** Some tests are intentionally slow:
 - CPU Performance: 10 seconds
-- Power/Energy Report: 15 seconds
-- Windows Update Search: 30-60 seconds
-- DISM/SFC Scans: 5-15 minutes
+- Power/Energy Report: 15 seconds (admin only)
+- Windows Update Search: 30-90 seconds
+- DISM/SFC Scans: 5-15 minutes each (admin only)
+- DirectX Diagnostics (dxdiag): Up to 45 seconds
 
 ---
 
 ## 🛡️ Privacy & Safety
 
 * **Admin Rights:** Required for DISM, SFC, energy reports, SMART data, Windows Update queries
-* **Report Contents:** Includes computer name, username, installed software paths
+* **Report Contents:** Includes computer name, username, installed software paths, hardware details
 * **Data Sensitivity:** Reports may reveal system configuration—review before sharing
 * **No Telemetry:** Script does not send data anywhere; purely local operation
 * **Auto-Download:** Only downloads from official Microsoft servers (download.sysinternals.com)
+* **GPU Tools:** GPU-Z must be downloaded manually from techpowerup.com (launcher opens browser)
 
 ---
 
@@ -240,16 +274,14 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 
 ## 🗺️ Roadmap
 
-### Version 2.2
-* Configuration file support (JSON) for test customization
-* Report history viewer in launcher
-* Old report cleanup functionality
-* Tunable summary verbosity levels
-* Advanced GPU diagnostics (if GPU-Z or similar available)
+### Version 2.3
+* HTML report export with charts and graphs
 * Baseline comparison mode (compare current vs. previous tests)
 * Skip flags (`-SkipCPU`, `-SkipNetwork`, etc.)
 * CSV export for data analysis
-* HTML report export with charts and graphs
+* Network throughput testing
+* Memory leak detection
+* Audio device testing
 
 ### Version 3.0 (Long-term)
 * WPF/WinUI graphical interface option
@@ -264,12 +296,61 @@ The batch launcher (`SystemTester_Launcher.bat`) provides:
 
 ---
 
+## 🎮 GPU Testing Details
+
+### What Gets Tested
+
+**Basic GPU Info (Option 12a):**
+- All installed GPUs with detailed specs
+- Display/monitor configuration
+- Driver details with digital signatures
+- DirectX version and capabilities
+- OpenGL registry information
+- Hardware-accelerated GPU scheduling status
+
+**Vendor-Specific Tests (Option 12b):**
+- **NVIDIA:** Real-time metrics via nvidia-smi
+  - Temperature, utilization, memory usage
+  - Power draw, clock speeds
+  - Full detailed GPU query
+- **AMD:** Registry-based driver detection
+  - Driver version and date
+  - GPU identification
+
+**GPU Memory (Option 12c):**
+- Total VRAM capacity
+- Active GPU process detection
+- Performance counter integration
+
+### GPU Tool Requirements
+
+| Tool | Required For | Included With |
+|------|--------------|---------------|
+| CIM/WMI | Basic info | Windows (always available) |
+| dxdiag | DirectX info | Windows (always available) |
+| nvidia-smi | NVIDIA metrics | NVIDIA drivers |
+| Registry | AMD detection | Windows (always available) |
+| GPU-Z | Advanced monitoring | Manual download (optional) |
+
+### GPU Stress Testing (Optional)
+
+The launcher's GPU Tools Manager (Option 6) provides recommendations for:
+- **FurMark** - GPU stress test (generates significant heat!)
+- **3DMark** - Industry standard benchmarking
+- **Unigine Heaven/Valley** - Graphics stress testing
+- **OCCT** - Error detection and stability testing
+
+**⚠️ Warning:** Stress tests generate significant heat and should be used with caution on laptops.
+
+---
+
 ## 🤝 Contributing
 
 Contributions welcome! Areas of interest:
 
 * **Parsers:** New tool output cleaners
-* **Tests:** Additional diagnostic modules (GPU, audio, peripherals)
+* **Tests:** Additional diagnostic modules (audio, peripherals, temperatures)
+* **GPU Tools:** Additional vendor integrations (Intel Arc, etc.)
 * **Performance:** Optimization of slow operations
 * **Documentation:** Tutorial videos, screenshots, wiki articles
 * **Testing:** Pester unit tests, integration tests
@@ -279,8 +360,9 @@ Contributions welcome! Areas of interest:
 1. Open an issue to discuss large changes
 2. Follow existing code style and patterns
 3. Test on Windows 10 and Windows 11
-4. Update README and help text
-5. Run PSScriptAnalyzer if possible
+4. Test with multiple GPU types if possible
+5. Update README and help text
+6. Run PSScriptAnalyzer if possible
 
 ---
 
@@ -301,6 +383,9 @@ The above copyright notice and this permission notice shall be included in all c
 * **Download Sysinternals:** [live.sysinternals.com](https://live.sysinternals.com)
 * **Sysinternals Documentation:** [docs.microsoft.com/sysinternals](https://docs.microsoft.com/sysinternals)
 * **PowerShell Documentation:** [docs.microsoft.com/powershell](https://docs.microsoft.com/powershell)
+* **GPU-Z Download:** [techpowerup.com/gpuz](https://www.techpowerup.com/gpuz/)
+* **NVIDIA Drivers:** [nvidia.com/drivers](https://www.nvidia.com/Download/index.aspx)
+* **AMD Drivers:** [amd.com/support](https://www.amd.com/en/support)
 * **Report Issues:** [GitHub Issues](../../issues)
 * **Feature Requests:** [GitHub Discussions](../../discussions)
 
@@ -326,6 +411,7 @@ For security vulnerabilities or sensitive findings:
 * **Documentation Issues:** Open a GitHub issue
 * **Feature Requests:** Start a GitHub discussion
 * **General Questions:** Check the Help section in launcher (Option 7)
+* **GPU Testing Help:** See GPU Tools Manager (Batch Menu Option 6)
 * **Commercial Support:** Contact support@pnwcomputers.com
 
 ---
@@ -334,9 +420,11 @@ For security vulnerabilities or sensitive findings:
 
 * **Microsoft Sysinternals Team** - For the incredible suite of diagnostic tools
 * **Mark Russinovich** - For creating and maintaining Sysinternals
+* **NVIDIA & AMD** - For providing diagnostic tools and APIs
+* **TechPowerUp** - For GPU-Z, an excellent GPU monitoring tool
 * **PowerShell Community** - For modules, patterns, and best practices
 * **Contributors** - Everyone who has reported issues, suggested features, or contributed code
 
 ---
 
-**Last Updated:** January 2025 | **Version:** 2.0 | **Status:** Production Ready
+**Last Updated:** January 2025 | **Version:** 2.1 | **Status:** Production Ready
