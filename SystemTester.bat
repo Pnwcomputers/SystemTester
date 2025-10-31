@@ -17,18 +17,21 @@ set "SCRIPT_VERSION=2.2"
 :: =====================================================
 set "_ELEV_FLAG=%~1"
 
-:: Use net session for reliable admin check
-net session >nul 2>&1
-if %errorlevel% == 0 goto :ADMIN_CONFIRMED
+:: Primary admin check via PowerShell identity (works without Server service)
+set "IS_ADMIN="
+for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "(New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)" 2^>nul`) do set "IS_ADMIN=%%A"
+if /i "%IS_ADMIN%"=="True" goto :ADMIN_CONFIRMED
+
+:: Fallback check using FLTMC (requires elevation)
+fltmc >nul 2>&1 && goto :ADMIN_CONFIRMED
 
 :: Not admin - check if this is retry after elevation attempt
 if /i "%_ELEV_FLAG%"=="/elevated" (
     echo.
-    echo [ERROR] Elevation failed or was cancelled.
-    echo         Right-click and choose "Run as administrator"
+    echo [WARNING] Admin status could not be verified after elevation.
+    echo           Continuing anyway; some tests may be limited.
     echo.
-    pause
-    exit /b 1
+    goto :ADMIN_CONFIRMED
 )
 
 :: Request elevation
