@@ -730,4 +730,8 @@ echo   - SystemTest_Detailed_*.txt (full output)
 echo   - energy-report.html (if power test ran)
 echo.
 pause
+<<<<<<< HEAD
 exit /b 0
+=======
+exit /b 0
+>>>>>>> cc4a1ddc3316036b75a8f819d136b6642df170c4
