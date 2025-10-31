@@ -1,4 +1,4 @@
-# 🧰 Portable Sysinternals System Tester v2.2 (FIXED)
+# 🧰 Portable Sysinternals System Tester v2.2 (FIX IN PROGRESS)
 
 **Thumb-drive friendly, no-install Windows hardware health check toolkit** powered by **Sysinternals** and **PowerShell**.
 
