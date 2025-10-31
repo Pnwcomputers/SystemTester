@@ -11,11 +11,15 @@ setlocal enableextensions enabledelayedexpansion
 set "MIN_ZIP_SIZE=10000000"
 set "DOWNLOAD_TIMEOUT_SEC=120"
 set "SCRIPT_VERSION=2.2"
+if not defined ST_DEBUG set "ST_DEBUG=0"
+set "LAUNCH_LOG=%TEMP%\SystemTester_launcher.log"
 
 :: =====================================================
 :: Reliable admin detection and elevation
 :: =====================================================
 set "_ELEV_FLAG=%~1"
+set "_DEBUG_FLAG=%~2"
+if /i "%_DEBUG_FLAG%"=="debug" set "ST_DEBUG=1"
 
 :: Primary admin check via PowerShell identity (works without Server service)
 set "IS_ADMIN="
@@ -49,7 +53,10 @@ echo.
 echo Requesting elevation...
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs -WorkingDirectory '%CD%' -WindowStyle Normal"
+set "_ELEV_ARGS=/elevated"
+if "%ST_DEBUG%"=="1" set "_ELEV_ARGS=/elevated debug"
+echo [%DATE% %TIME%] Elevating: "%~f0" %_ELEV_ARGS% ^>^> "%LAUNCH_LOG%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%_ELEV_ARGS%' -Verb RunAs -WorkingDirectory '%CD%' -WindowStyle Normal"
 
 if errorlevel 1 (
     echo [ERROR] Failed to elevate. Run manually as administrator.
@@ -113,6 +120,9 @@ if "%SCRIPT_PS1%"=="" (
 )
 
 echo Using PowerShell script: %SCRIPT_PS1_NAME%
+if "%ST_DEBUG%"=="1" (
+    echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" ^(exists: ^<^%SCRIPT_PS1%^^?^) >> "%LAUNCH_LOG%"
+)
 echo.
 
 :: Check PowerShell version
@@ -180,7 +190,10 @@ echo              STARTING INTERACTIVE MODE
 echo ========================================================
 echo.
 pause
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%"
+set "PS_EXTRA="
+if "%ST_DEBUG%"=="1" set "PS_EXTRA=-NoExit"
+if "%ST_DEBUG%"=="1" echo [%DATE% %TIME%] Launching PS interactive: powershell -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%" >> "%LAUNCH_LOG%"
+powershell -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%"
 echo.
 if errorlevel 1 (
     echo [ERROR] Script failed (code: %errorlevel%)
@@ -202,7 +215,10 @@ echo May take 10-30 minutes depending on your system.
 echo.
 pause
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -AutoRun
+set "PS_EXTRA="
+if "%ST_DEBUG%"=="1" set "PS_EXTRA=-NoExit"
+if "%ST_DEBUG%"=="1" echo [%DATE% %TIME%] Launching PS autorun: powershell -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%" -AutoRun >> "%LAUNCH_LOG%"
+powershell -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%" -AutoRun
 echo.
 if errorlevel 1 (
     echo [ERROR] Tests failed (code: %errorlevel%)
