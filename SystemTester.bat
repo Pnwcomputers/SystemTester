@@ -74,7 +74,17 @@ echo.
 :: Set paths
 set "SCRIPT_DIR=%cd%"
 set "DRIVE_LETTER=%~d0"
-set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
+
+:: Locate PowerShell script (supports legacy and _FIXED names)
+set "SCRIPT_PS1="
+set "SCRIPT_PS1_NAME="
+if exist "%SCRIPT_DIR%\SystemTester_FIXED.ps1" (
+    set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester_FIXED.ps1"
+    set "SCRIPT_PS1_NAME=SystemTester_FIXED.ps1"
+) else if exist "%SCRIPT_DIR%\SystemTester.ps1" (
+    set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
+    set "SCRIPT_PS1_NAME=SystemTester.ps1"
+)
 
 :: Check path length
 for /f %%i in ('powershell -NoProfile -Command "('%SCRIPT_DIR%').Length" 2^>nul') do set "PATH_LENGTH=%%i"
@@ -90,14 +100,21 @@ echo Path length: %PATH_LENGTH% characters
 echo.
 
 :: Verify PowerShell script exists
-if not exist "%SCRIPT_PS1%" (
-    echo [ERROR] PowerShell script not found: %SCRIPT_PS1%
+if "%SCRIPT_PS1%"=="" (
+    echo [ERROR] PowerShell script not found in: %SCRIPT_DIR%
     echo.
-    echo Ensure SystemTester.ps1 is in the same folder.
+    echo Expected one of the following files:
+    echo   - SystemTester_FIXED.ps1
+    echo   - SystemTester.ps1
+    echo.
+    echo If you renamed the script, restore one of the supported names.
     echo.
     pause
     exit /b 1
 )
+
+echo Using PowerShell script: %SCRIPT_PS1_NAME%
+echo.
 
 :: Check PowerShell version
 echo Checking PowerShell...
