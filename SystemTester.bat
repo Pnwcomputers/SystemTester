@@ -4,13 +4,13 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Production Ready Version - v2.2.1 (FIXED)
+:: Production Ready Version - v2.2
 :: =====================================================
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
 set "DOWNLOAD_TIMEOUT_SEC=120"
-set "SCRIPT_VERSION=2.2.1"
+set "SCRIPT_VERSION=2.2"
 if not defined ST_DEBUG set "ST_DEBUG=0"
 set "LAUNCH_LOG=%TEMP%\SystemTester_launcher.log"
 
@@ -55,16 +55,11 @@ echo.
 
 set "_ELEV_ARGS=/elevated"
 if "%ST_DEBUG%"=="1" set "_ELEV_ARGS=/elevated debug"
-echo [%DATE% %TIME%] Elevating: "%~f0" %_ELEV_ARGS% >> "%LAUNCH_LOG%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%_ELEV_ARGS%' -Verb RunAs -WorkingDirectory '%CD%' -WindowStyle Normal"
-
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%_ELEV_ARGS%' -Verb RunAs -WorkingDirectory '%~dp0'"
 if errorlevel 1 (
-    echo [ERROR] Failed to elevate. Run manually as administrator.
+    echo [ERROR] Failed to elevate.
     pause
 )
-echo.
-echo Press any key to close this window. The elevated window should now be open.
-pause >nul
 exit /b
 
 :ADMIN_CONFIRMED
@@ -88,21 +83,9 @@ echo.
 set "SCRIPT_DIR=%cd%"
 set "DRIVE_LETTER=%~d0"
 
-:: Locate PowerShell script (FIXED: Removed quotes from variable)
-set SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1
+:: Locate PowerShell script (single supported name)
+set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
 set "SCRIPT_PS1_NAME=SystemTester.ps1"
-
-:: Verify PowerShell script exists BEFORE checking path length
-if not exist "%SCRIPT_PS1%" (
-    echo [ERROR] PowerShell script not found!
-    echo.
-    echo Expected file: %SCRIPT_PS1%
-    echo.
-    echo Make sure SystemTester.ps1 is in the same directory as this batch file.
-    echo.
-    pause
-    exit /b 1
-)
 
 :: Check path length
 for /f %%i in ('powershell -NoProfile -Command "('%SCRIPT_DIR%').Length" 2^>nul') do set "PATH_LENGTH=%%i"
@@ -117,10 +100,23 @@ echo Script directory: %SCRIPT_DIR%
 echo Path length: %PATH_LENGTH% characters
 echo.
 
+:: Verify PowerShell script exists
+if "%SCRIPT_PS1%"=="" (
+    echo [ERROR] PowerShell script not found in: %SCRIPT_DIR%
+    echo.
+    echo Expected one of the following files:
+    echo   - SystemTester_FIXED.ps1
+    echo   - SystemTester.ps1
+    echo.
+    echo If you renamed the script, restore one of the supported names.
+    echo.
+    pause
+    exit /b 1
+)
+
 echo Using PowerShell script: %SCRIPT_PS1_NAME%
 if "%ST_DEBUG%"=="1" (
-    echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" >> "%LAUNCH_LOG%"
-    echo [DEBUG] Full path: %SCRIPT_PS1%
+    echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" ^(exists: ^<^%SCRIPT_PS1%^^?^) >> "%LAUNCH_LOG%"
 )
 echo.
 
@@ -191,30 +187,10 @@ echo.
 pause
 set "PS_EXTRA="
 if "%ST_DEBUG%"=="1" set "PS_EXTRA=-NoExit"
-if "%ST_DEBUG%"=="1" (
-    echo [%DATE% %TIME%] Launching PS interactive >> "%LAUNCH_LOG%"
-    echo [DEBUG] Command: powershell.exe -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%"
-    echo [DEBUG] Working Directory: %CD%
-    echo.
-)
-
-:: FIXED: Proper quoting with -File parameter
 powershell.exe -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%"
-set "PS_EXIT_CODE=%ERRORLEVEL%"
-
 echo.
-if not "%PS_EXIT_CODE%"=="0" (
-    echo [ERROR] Script failed with exit code: %PS_EXIT_CODE%
-    echo.
-    echo Troubleshooting tips:
-    echo 1. Make sure SystemTester.ps1 exists in: %SCRIPT_DIR%
-    echo 2. Check if execution policy is blocking scripts (use Option 3)
-    echo 3. Try running with debug mode: %~nx0 /elevated debug
-    echo.
-    if "%ST_DEBUG%"=="1" (
-        echo [DEBUG] Failed command was:
-        echo powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%"
-    )
+if errorlevel 1 (
+    echo [ERROR] Script failed (code: %errorlevel%)
     pause
 ) else (
     echo Completed successfully.
@@ -235,30 +211,10 @@ pause
 echo.
 set "PS_EXTRA="
 if "%ST_DEBUG%"=="1" set "PS_EXTRA=-NoExit"
-if "%ST_DEBUG%"=="1" (
-    echo [%DATE% %TIME%] Launching PS autorun >> "%LAUNCH_LOG%"
-    echo [DEBUG] Command: powershell.exe -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%" -AutoRun
-    echo [DEBUG] Working Directory: %CD%
-    echo.
-)
-
-:: FIXED: Proper quoting with -File parameter and arguments
 powershell.exe -NoProfile -ExecutionPolicy Bypass %PS_EXTRA% -File "%SCRIPT_PS1%" -AutoRun
-set "PS_EXIT_CODE=%ERRORLEVEL%"
-
 echo.
-if not "%PS_EXIT_CODE%"=="0" (
-    echo [ERROR] Tests failed with exit code: %PS_EXIT_CODE%
-    echo.
-    echo Troubleshooting tips:
-    echo 1. Make sure SystemTester.ps1 exists in: %SCRIPT_DIR%
-    echo 2. Check if execution policy is blocking scripts (use Option 3)
-    echo 3. Try running with debug mode: %~nx0 /elevated debug
-    echo.
-    if "%ST_DEBUG%"=="1" (
-        echo [DEBUG] Failed command was:
-        echo powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -AutoRun
-    )
+if errorlevel 1 (
+    echo [ERROR] Tests failed (code: %errorlevel%)
     pause
 ) else (
     echo All tests completed. Check directory for reports.
@@ -276,12 +232,7 @@ echo Current policy:
 powershell -NoProfile -Command "Get-ExecutionPolicy -List | Format-Table -AutoSize"
 echo.
 echo Setting to RemoteSigned for CurrentUser...
-powershell -NoProfile -Command "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force"
-echo.
-echo New policy:
-powershell -NoProfile -Command "Get-ExecutionPolicy -List | Format-Table -AutoSize"
-echo.
-echo Done! Execution policy updated.
+powershell -NoProfile -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; Write-Host 'SUCCESS' -ForegroundColor Green"
 echo.
 pause
 goto MENU
@@ -289,71 +240,28 @@ goto MENU
 :VERIFY
 echo.
 echo ========================================================
-echo          VERIFYING TOOL INTEGRITY
+echo       TOOL INTEGRITY VERIFICATION
 echo ========================================================
 echo.
-echo This will check digital signatures of all Sysinternals tools...
+echo This will check digital signatures and file sizes
+echo of all Sysinternals tools in your installation.
 echo.
 pause
-
-if not exist "%SCRIPT_DIR%\Sysinternals" (
-    echo [ERROR] Sysinternals folder not found!
-    echo Use Menu Option 5 to download first.
-    echo.
-    pause
-    goto MENU
+echo.
+:: Call the PowerShell function for tool verification
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { . ""%SCRIPT_PS1%""; if (-not (Test-ToolVerification)) { exit 2 } else { exit 0 } } catch { Write-Error $_; exit 1 }"
+set "VERIFY_CODE=%errorlevel%"
+echo.
+if "%VERIFY_CODE%"=="0" (
+    echo Verification complete. All tools validated successfully.
+) else (
+    if "%VERIFY_CODE%"=="2" (
+        echo [WARNING] Verification completed with issues detected. Review output above.
+        echo         Use Menu Option 5 to re-download the Sysinternals Suite.
+    ) else (
+        echo [ERROR] Verification encountered an issue. Review output above.
+    )
 )
-
-echo Checking tools in: %SCRIPT_DIR%\Sysinternals
-echo.
-
-:: Use PowerShell to verify all tools
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-"$tools = @('Autoruns', 'cpustres', 'Coreinfo', 'DiskView', 'RAMMap', 'Testlimit', 'Whois', 'DiskExt', 'Listdlls', 'ProcDump', 'procexp'); ^
-$sysinternalsPath = '%SCRIPT_DIR%\Sysinternals'; ^
-$results = @(); ^
-foreach ($tool in $tools) { ^
-    $toolPath = Join-Path $sysinternalsPath \"$tool.exe\"; ^
-    if (Test-Path $toolPath) { ^
-        $sig = Get-AuthenticodeSignature $toolPath -ErrorAction SilentlyContinue; ^
-        $fileInfo = Get-Item $toolPath; ^
-        $status = 'UNKNOWN'; ^
-        if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -match 'Microsoft') { ^
-            $status = 'VALID (MS)'; ^
-        } elseif ($sig.Status -eq 'Valid') { ^
-            $status = 'VALID (Other)'; ^
-        } elseif ($sig.Status -eq 'NotSigned') { ^
-            $status = 'NOT SIGNED'; ^
-        } else { ^
-            $status = \"BAD: $($sig.Status)\"; ^
-        } ^
-        $results += [PSCustomObject]@{ ^
-            Tool = $tool; ^
-            Status = $status; ^
-            'Size (KB)' = [math]::Round($fileInfo.Length / 1KB, 1); ^
-        }; ^
-    } else { ^
-        $results += [PSCustomObject]@{ ^
-            Tool = $tool; ^
-            Status = 'MISSING'; ^
-            'Size (KB)' = 0; ^
-        }; ^
-    } ^
-}; ^
-$results | Format-Table -AutoSize"
-
-echo.
-echo ========================================================
-echo Verification complete!
-echo.
-echo Legend:
-echo   VALID (MS)    = Valid Microsoft signature
-echo   VALID (Other) = Valid non-Microsoft signature  
-echo   NOT SIGNED    = No digital signature
-echo   MISSING       = File not found
-echo   BAD           = Invalid or corrupted signature
-echo.
-echo If tools show as MISSING or BAD, use Option 5 to re-download.
 echo.
 pause
 goto MENU
@@ -361,156 +269,228 @@ goto MENU
 :DOWNLOAD
 echo.
 echo ========================================================
-echo       DOWNLOAD/UPDATE SYSINTERNALS SUITE
+echo      DOWNLOAD/UPDATE SYSINTERNALS SUITE
 echo ========================================================
 echo.
-echo This will download the complete Sysinternals Suite (~30MB)
-echo from Microsoft's official server.
+set "SYSINT_DIR=%SCRIPT_DIR%\Sysinternals"
+set "ZIP_FILE=%SCRIPT_DIR%\SysinternalsSuite.zip"
+set "DOWNLOAD_URL=https://download.sysinternals.com/files/SysinternalsSuite.zip"
+
+echo This will download ~35MB from Microsoft.
+echo Target: %SYSINT_DIR%
 echo.
-echo Target directory: %SCRIPT_DIR%\Sysinternals\
-echo.
-set /p "confirm=Continue? (Y/N): "
+set /p "confirm=Proceed? (Y/N): "
 if /i not "%confirm%"=="Y" goto MENU
 
 echo.
-echo Downloading Sysinternals Suite...
-echo This may take 1-3 minutes depending on your connection.
-echo.
-
-:: Create Sysinternals directory if it doesn't exist
-if not exist "%SCRIPT_DIR%\Sysinternals" mkdir "%SCRIPT_DIR%\Sysinternals"
-
-:: Download using PowerShell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-"$ProgressPreference = 'SilentlyContinue'; ^
-$url = 'https://download.sysinternals.com/files/SysinternalsSuite.zip'; ^
-$zipFile = '%SCRIPT_DIR%\SysinternalsSuite.zip'; ^
-$extractPath = '%SCRIPT_DIR%\Sysinternals'; ^
-Write-Host 'Downloading from: $url' -ForegroundColor Cyan; ^
-try { ^
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ^
-    Invoke-WebRequest -Uri $url -OutFile $zipFile -UseBasicParsing -TimeoutSec %DOWNLOAD_TIMEOUT_SEC%; ^
-    $fileSize = (Get-Item $zipFile).Length; ^
-    Write-Host \"Downloaded: $([math]::Round($fileSize/1MB,1)) MB\" -ForegroundColor Green; ^
-    if ($fileSize -lt %MIN_ZIP_SIZE%) { ^
-        Write-Host '[ERROR] Downloaded file is too small. Check internet connection.' -ForegroundColor Red; ^
-        exit 1; ^
-    } ^
-    Write-Host 'Extracting files...' -ForegroundColor Cyan; ^
-    Add-Type -Assembly System.IO.Compression.FileSystem; ^
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipFile, $extractPath, $true); ^
-    Write-Host 'Extraction complete!' -ForegroundColor Green; ^
-    Remove-Item $zipFile -Force; ^
-    Write-Host 'Cleanup complete!' -ForegroundColor Green; ^
-    exit 0; ^
-} catch { ^
-    Write-Host \"[ERROR] $($_.Exception.Message)\" -ForegroundColor Red; ^
-    exit 1; ^
-}"
+echo Downloading...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue; $p = @{ Uri = '%DOWNLOAD_URL%'; OutFile = '%ZIP_FILE%' }; if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $p.UseBasicParsing = $true }; if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec')) { $p.TimeoutSec = %DOWNLOAD_TIMEOUT_SEC% }; Invoke-WebRequest @p; Write-Host 'Download complete' -ForegroundColor Green } catch { Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
 
 if errorlevel 1 (
     echo.
-    echo [ERROR] Download/extraction failed!
-    echo.
-    echo Possible causes:
-    echo 1. No internet connection
-    echo 2. Firewall blocking downloads
-    echo 3. Proxy server issues
-    echo.
-    echo Manual download instructions:
-    echo 1. Visit: https://download.sysinternals.com/files/SysinternalsSuite.zip
-    echo 2. Download the ZIP file
-    echo 3. Extract to: %SCRIPT_DIR%\Sysinternals\
-    echo.
-) else (
-    echo.
-    echo ========================================================
-    echo Download and installation successful!
-    echo ========================================================
-    echo.
-    echo Tools installed in: %SCRIPT_DIR%\Sysinternals\
-    echo.
-    echo Run Option 4 to verify tool integrity.
-    echo.
+    echo Download failed. Check internet connection.
+    if exist "%ZIP_FILE%" del "%ZIP_FILE%" 2>nul
+    pause
+    goto MENU
 )
+
+if not exist "%ZIP_FILE%" (
+    echo [ERROR] Download failed - file not created
+    pause
+    goto MENU
+)
+
+for %%A in ("%ZIP_FILE%") do set "FILE_SIZE=%%~zA"
+if %FILE_SIZE% LSS %MIN_ZIP_SIZE% (
+    echo [ERROR] File too small (%FILE_SIZE% bytes^)
+    del "%ZIP_FILE%" 2>nul
+    pause
+    goto MENU
+)
+
+echo File downloaded: %FILE_SIZE% bytes
+echo.
+echo Extracting...
+if not exist "%SYSINT_DIR%" mkdir "%SYSINT_DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%SYSINT_DIR%' -Force; Write-Host 'Extracted successfully' -ForegroundColor Green"
+
+if errorlevel 1 (
+    echo [ERROR] Extraction failed. Remove any partial files and retry.
+    if exist "%ZIP_FILE%" del "%ZIP_FILE%" 2>nul
+    pause
+    goto MENU
+)
+
+del "%ZIP_FILE%" 2>nul
+echo.
+set "TOOL_COUNT=0"
+for %%F in ("%SYSINT_DIR%\*.exe") do set /a TOOL_COUNT+=1
+echo [SUCCESS] %TOOL_COUNT% tools installed in %SYSINT_DIR%
+echo.
+echo TIP: Use Menu Option 4 to verify tool integrity
+echo.
 pause
 goto MENU
 
 :GPU_TOOLS
 cls
 echo ========================================================
-echo           GPU TESTING TOOLS MANAGER
+echo          GPU TESTING TOOLS MANAGER
 echo ========================================================
 echo.
-echo This manager helps you:
-echo - Check if vendor-specific tools are installed
-echo - Get download links for GPU testing software
-echo - Verify GPU driver information
-echo.
-echo --------------------------------------------------------
-echo                    GPU TOOLS MENU
-echo --------------------------------------------------------
-echo.
-echo 1. Check NVIDIA Tools (nvidia-smi)
-echo 2. Check AMD Tools
-echo 3. Recommended GPU Testing Tools
-echo 4. Return to Main Menu
-echo.
-echo --------------------------------------------------------
-set /p "gpu_choice=Choose an option (1-4): "
+set "GPU_TOOLS_DIR=%SCRIPT_DIR%\Tools"
+set "GPUZ_PATH=%GPU_TOOLS_DIR%\GPU-Z.exe"
+set "GPUZ_URL=https://www.techpowerup.com/gpuz/"
+set "GPUZ_SIZE="
 
-if "%gpu_choice%"=="1" goto GPU_TOOLS_NVIDIA
-if "%gpu_choice%"=="2" goto GPU_TOOLS_AMD
-if "%gpu_choice%"=="3" goto GPU_TOOLS_RECOMMEND
-if "%gpu_choice%"=="4" goto MENU
+echo GPU Tools Directory: %GPU_TOOLS_DIR%
+echo.
+echo --------------------------------------------------------
+echo AVAILABLE GPU TESTING TOOLS:
+echo --------------------------------------------------------
+echo.
+echo 1. GPU-Z (TechPowerUp) - Detailed GPU monitoring
+echo 2. Check NVIDIA Drivers/Tools
+echo 3. Check AMD Drivers/Tools  
+echo 4. Download Recommendations
+echo 5. Return to Main Menu
+echo.
+echo --------------------------------------------------------
+echo INSTALLED TOOLS:
+echo --------------------------------------------------------
+if exist "%GPUZ_PATH%" (
+    for %%A in ("%GPUZ_PATH%") do set "GPUZ_SIZE=%%~zA"
+    if not defined GPUZ_SIZE set "GPUZ_SIZE=0"
+    if !GPUZ_SIZE! LSS 500000 (
+        echo [!] GPU-Z.exe - File appears incomplete (!GPUZ_SIZE! bytes)
+    ) else (
+        echo [OK] GPU-Z.exe - Installed (!GPUZ_SIZE! bytes)
+    )
+) else (
+    echo [ ] GPU-Z.exe - Not installed
+)
 
-echo Invalid choice. Try again.
+if exist "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe" (
+    echo [OK] NVIDIA System Management Interface
+) else (
+    echo [ ] NVIDIA-SMI - Not installed ^(NVIDIA GPU drivers^)
+)
+
+:: Check for AMD tools
+set "AMD_COUNT="
+for /f %%A in ('powershell -NoProfile -Command "(Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object { Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue } | Where-Object { $_.DriverDesc -match 'AMD|Radeon' }).Count" 2^>nul') do set "AMD_COUNT=%%A"
+if not defined AMD_COUNT set "AMD_COUNT=0"
+if not "!AMD_COUNT!"=="0" (
+    echo [OK] AMD GPU Drivers - Detected (!AMD_COUNT! device^(s^))
+) else (
+    echo [ ] AMD GPU Drivers - Not detected
+)
+
+echo.
+set /p "gpu_choice=Choose an option (1-5): "
+
+if "%gpu_choice%"=="1" goto GPU_TOOLS_GPUZ
+if "%gpu_choice%"=="2" goto GPU_TOOLS_NVIDIA
+if "%gpu_choice%"=="3" goto GPU_TOOLS_AMD
+if "%gpu_choice%"=="4" goto GPU_TOOLS_RECOMMEND
+if "%gpu_choice%"=="5" goto MENU
+
+echo Invalid choice.
 timeout /t 1 >nul
+goto GPU_TOOLS
+
+:GPU_TOOLS_GPUZ
+cls
+echo ========================================================
+echo              GPU-Z INSTALLATION
+echo ========================================================
+echo.
+
+if exist "%GPUZ_PATH%" (
+    echo GPU-Z is already installed at:
+    echo %GPUZ_PATH%
+    echo.
+    set "GPUZ_SIZE="
+    for %%A in ("%GPUZ_PATH%") do set "GPUZ_SIZE=%%~zA"
+    if not defined GPUZ_SIZE set "GPUZ_SIZE=0"
+    echo Size: !GPUZ_SIZE! bytes
+    if !GPUZ_SIZE! LSS 500000 (
+        echo WARNING: File size is unusually small. Re-download recommended.
+        echo.
+    )
+    echo.
+    set /p "run_gpuz=Run GPU-Z now? (Y/N): "
+    if /i "!run_gpuz!"=="Y" (
+        echo.
+        echo Launching GPU-Z...
+        start "" "%GPUZ_PATH%"
+        timeout /t 2 >nul
+    )
+    goto GPU_TOOLS
+)
+
+echo GPU-Z is FREE software from TechPowerUp.
+echo.
+echo DOWNLOAD INSTRUCTIONS:
+echo ----------------------
+echo 1. Visit: %GPUZ_URL%
+echo 2. Click "Download" button
+echo 3. Save the file
+echo 4. IMPORTANT: Save it as: %GPUZ_PATH%
+echo.
+echo Creating Tools directory...
+if not exist "%GPU_TOOLS_DIR%" (
+    mkdir "%GPU_TOOLS_DIR%" 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Cannot create directory: %GPU_TOOLS_DIR%
+        pause
+        goto GPU_TOOLS
+    )
+    echo [OK] Directory created
+)
+
+echo.
+echo Opening download page in browser...
+start "" "%GPUZ_URL%"
+echo.
+echo ========================================================
+echo MANUAL INSTALLATION STEPS:
+echo ========================================================
+echo.
+echo 1. Download GPU-Z from the webpage that just opened
+echo 2. Save it to: %GPU_TOOLS_DIR%
+echo 3. Rename it to: GPU-Z.exe
+echo.
+echo Full path should be: %GPUZ_PATH%
+echo.
+echo NOTE: TechPowerUp doesn't provide direct download links,
+echo       so manual download is required.
+echo.
+pause
 goto GPU_TOOLS
 
 :GPU_TOOLS_NVIDIA
 cls
 echo ========================================================
-echo             NVIDIA TOOLS VERIFICATION
+echo           NVIDIA TOOLS VERIFICATION
 echo ========================================================
 echo.
 
-:: Check for nvidia-smi
-where nvidia-smi >nul 2>&1
-if errorlevel 1 (
-    echo [!] nvidia-smi not found in PATH
-    echo.
-    echo Checking common NVIDIA installation locations...
-    
-    set "NVIDIA_SMI_FOUND="
-    if exist "C:\Windows\System32\nvidia-smi.exe" (
-        set "NVIDIA_SMI_FOUND=C:\Windows\System32\nvidia-smi.exe"
-        echo [OK] Found at: C:\Windows\System32\nvidia-smi.exe
-    )
-    if exist "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe" (
-        set "NVIDIA_SMI_FOUND=C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
-        echo [OK] Found at: C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe
-    )
-    
-    if defined NVIDIA_SMI_FOUND (
-        echo.
-        echo Running nvidia-smi...
-        echo ========================================================
-        "!NVIDIA_SMI_FOUND!"
-        echo ========================================================
-    ) else (
-        echo [!] nvidia-smi not found in common locations
-    )
-) else (
-    echo [OK] nvidia-smi found in PATH
+set "NVIDIA_SMI=C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+set "NVIDIA_DRIVERS=C:\Program Files\NVIDIA Corporation"
+
+if exist "%NVIDIA_SMI%" (
+    echo [OK] NVIDIA System Management Interface found
     echo.
     echo Running nvidia-smi...
     echo ========================================================
-    nvidia-smi
+    "%NVIDIA_SMI%" --query-gpu=name,driver_version,memory.total --format=csv
     echo ========================================================
-)
-
-if not defined NVIDIA_SMI_FOUND (
+    echo.
+    echo Full nvidia-smi output:
+    "%NVIDIA_SMI%"
+) else (
+    echo [!] NVIDIA-SMI not found
     echo.
     echo This tool is included with NVIDIA GPU drivers.
     echo.
@@ -659,12 +639,7 @@ echo ========================================================
 echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo NEW IN v2.2.1:
-echo   - FIXED: PowerShell script launching issues
-echo   - FIXED: Better error handling and debug output
-echo   - Enhanced path quoting for special characters
-echo.
-echo PREVIOUS FEATURES (v2.2):
+echo NEW IN v2.2:
 echo   - Tool integrity verification (digital signatures)
 echo   - Dual report system (Clean + Detailed)
 echo   - Fixed memory usage calculation bug
@@ -676,55 +651,41 @@ echo --------------------------------------------------------
 echo COMMON ISSUES:
 echo --------------------------------------------------------
 echo.
-echo 1. SCRIPT WON'T LAUNCH AFTER ADMIN PROMPT
-echo    FIXED in v2.2.1 - Use this updated batch file
-echo    Problem was improper path quoting in PowerShell commands
-echo.
-echo 2. EXECUTION POLICY ERRORS
+echo 1. EXECUTION POLICY ERRORS
 echo    Solution: Use Menu Option 3
 echo.
-echo 3. SYSINTERNALS TOOLS NOT FOUND
+echo 2. SYSINTERNALS TOOLS NOT FOUND
 echo    Solution: Use Menu Option 5 to download
 echo.
-echo 4. TOOLS MAY BE CORRUPTED
+echo 3. TOOLS MAY BE CORRUPTED
 echo    Solution: Use Menu Option 4 to verify integrity
 echo              Then Option 5 to re-download if needed
 echo.
-echo 5. DOWNLOAD FAILS
+echo 4. DOWNLOAD FAILS
 echo    Causes: Firewall, proxy, no internet
 echo    Solution: Manual download from:
 echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
 echo    Extract to: %SCRIPT_DIR%\Sysinternals\
 echo.
-echo 6. MEMORY SHOWS 100%% (but Task Manager shows less)
+echo 5. MEMORY SHOWS 100%% (but Task Manager shows less)
 echo    This was a bug in v2.08 - FIXED in v2.2
 echo.
-echo 7. TESTS TAKE TOO LONG
+echo 6. TESTS TAKE TOO LONG
 echo    Expected durations:
 echo    - CPU Test: 10 seconds
 echo    - Energy Report: 15 seconds
 echo    - Windows Update: 30-90 seconds
 echo    - DISM/SFC: 5-15 minutes each
 echo.
-echo 8. REPORTS NOT GENERATED
+echo 7. REPORTS NOT GENERATED
 echo    - Check write permissions
 echo    - Ensure tests completed
 echo    - Look for SystemTest_Clean_*.txt
 echo.
-echo 9. PATH TOO LONG
+echo 8. PATH TOO LONG
 echo    Current: %PATH_LENGTH% characters
 echo    Limit: 260 characters
 echo    Solution: Move to C:\SysTest\
-echo.
-echo --------------------------------------------------------
-echo DEBUG MODE:
-echo --------------------------------------------------------
-echo.
-echo To enable detailed logging, run:
-echo    %~nx0 /elevated debug
-echo.
-echo This will keep the PowerShell window open and show
-echo the exact commands being executed.
 echo.
 echo --------------------------------------------------------
 echo FEATURES:
