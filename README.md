@@ -97,8 +97,8 @@ Version 2.2 introduces comprehensive GPU testing capabilities, advanced network 
 
 ```
 📂 SystemTester/
-├── 📄 SystemTester_FIXED.ps1    # Main PowerShell script (USE THIS)
-├── 📄 SystemTester_FIXED.bat    # Batch launcher (USE THIS)
+├── 📄 SystemTester.ps1    # Main PowerShell script (USE THIS)
+├── 📄 SystemTester.bat    # Batch launcher (USE THIS)
 ├── 📄 README.md                 # This file
 ├── 📄 LICENSE                   # MIT License
 ├── 📂 Sysinternals/             # Auto-created by launcher
@@ -123,7 +123,7 @@ Version 2.2 introduces comprehensive GPU testing capabilities, advanced network 
 ### Option A: Batch Launcher (Recommended)
 
 1. Download or clone this repository
-2. Run `SystemTester_FIXED.bat` (will request admin elevation)
+2. Run `SystemTester.bat` (will request admin elevation)
 3. Choose **Option 5** to auto-download Sysinternals Suite (first time only)
 4. Choose **Option 6** to set up GPU testing tools (optional)
 5. Choose **Option 1** for interactive menu or **Option 2** to run all tests
@@ -133,10 +133,10 @@ Version 2.2 introduces comprehensive GPU testing capabilities, advanced network 
 
 ```powershell
 # Interactive menu
-powershell -ExecutionPolicy Bypass -File .\SystemTester_FIXED.ps1
+powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1
 
 # Run all tests automatically
-powershell -ExecutionPolicy Bypass -File .\SystemTester_FIXED.ps1 -AutoRun
+powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun
 ```
 
 ### **First-Time Setup**
@@ -251,7 +251,7 @@ For detailed output, see: SystemTest_Detailed_20250103_143022.txt
 
 ## 🔧 Launcher Menu Options
 
-The batch launcher (`SystemTester_FIXED.bat`) provides:
+The batch launcher (`SystemTester.bat`) provides:
 
 1. **Run Interactive Menu** — Select individual tests (includes GPU sub-options)
 2. **Run ALL Tests Automatically** — Complete system scan with auto-report
@@ -288,10 +288,10 @@ When you select GPU testing in the PowerShell menu, you can:
 **Solution:** Right-click launcher and choose "Run as administrator"
 
 ### Script crashes immediately on startup (v2.2 original only)
-**Solution:** ✅ **FIXED** - Use `SystemTester_FIXED.ps1` instead. Original had missing `Initialize-Environment` function.
+**Solution:** ✅ **FIXED** - Use `SystemTester.ps1` instead. Original had missing `Initialize-Environment` function.
 
 ### Tool verification (Menu Option 4) crashes
-**Solution:** ✅ **FIXED** - Use `SystemTester_FIXED.bat` and `SystemTester_FIXED.ps1`. Missing function has been added.
+**Solution:** ✅ **FIXED** - Use `SystemTester.bat` and `SystemTester.ps1`. Missing function has been added.
 
 ### AMD GPU not detected (multi-GPU systems)
 **Solution:** ✅ **FIXED** - Script now checks ALL registry subkeys (\0000, \0001, \0002, etc.), not just \0000.
