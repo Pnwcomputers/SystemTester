@@ -241,13 +241,16 @@ echo.
 pause
 echo.
 :: Call the PowerShell function for tool verification
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { . '%SCRIPT_PS1%'; Test-ToolVerification; exit 0 } catch { Write-Error $_; exit 1 }"
-if errorlevel 1 (
-    echo.
-    echo [ERROR] Verification encountered an issue. Review output above.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { . ""%SCRIPT_PS1%""; if (-not (Test-ToolVerification)) { exit 2 } else { exit 0 } } catch { Write-Error $_; exit 1 }"
+set "VERIFY_CODE=%errorlevel%"
+echo.
+if "%VERIFY_CODE%"=="0" (
+    echo Verification complete. All tools validated successfully.
+) else if "%VERIFY_CODE%"=="2" (
+    echo [WARNING] Verification completed with issues detected. Review output above.
+    echo         Use Menu Option 5 to re-download the Sysinternals Suite.
 ) else (
-    echo.
-    echo Verification complete.
+    echo [ERROR] Verification encountered an issue. Review output above.
 )
 echo.
 pause

@@ -119,6 +119,9 @@ function Test-ToolVerification {
     
     foreach ($tool in $allTools) {
         $result = Test-ToolIntegrity -ToolName $tool
+        if (-not $stats.ContainsKey($result.Status)) {
+            $stats[$result.Status] = 0
+        }
         $stats[$result.Status]++
         
         $color = switch ($result.Status) {
@@ -160,15 +163,28 @@ function Test-ToolVerification {
     Write-Host ""
     
     $totalIssues = $stats.BAD_SIZE + $stats.BAD_SIGNATURE + $stats.MISSING + $stats.CHECK_FAILED
-    if ($totalIssues -eq 0 -and $stats.VALID_MS -gt 0) {
+    if ($totalIssues -eq 0 -and ($stats.VALID_MS + $stats.VALID_OTHER + $stats.NOT_SIGNED) -gt 0) {
         Write-Host "STATUS: All present tools are verified and safe to use" -ForegroundColor Green
-    } elseif ($totalIssues -gt 0) {
+        Write-Host ""
+        return $true
+    }
+
+    if ($totalIssues -gt 0) {
         Write-Host "STATUS: $totalIssues issue(s) detected - recommend re-download" -ForegroundColor Yellow
         if ($script:LaunchedViaBatch) {
             Write-Host "ACTION: Use Batch Menu Option 5 to re-download tools" -ForegroundColor Yellow
         }
+        Write-Host ""
+        return $false
+    }
+
+    Write-Host "STATUS: No tools were successfully verified" -ForegroundColor Yellow
+    Write-Host "        Ensure Sysinternals Suite is installed" -ForegroundColor Yellow
+    if ($script:LaunchedViaBatch) {
+        Write-Host "ACTION: Use Batch Menu Option 5 to download tools" -ForegroundColor Yellow
     }
     Write-Host ""
+    return $false
 }
 
 # Initialize environment
