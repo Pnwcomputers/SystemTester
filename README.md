@@ -28,6 +28,7 @@ Version 2.2 introduces comprehensive GPU testing capabilities and fixes several 
 * 🧹 **Output Cleaner** — removes banners, EULA text, usage blocks for readable reports
 * 🧠 **Comprehensive Tests** — CPU, RAM, Disk, GPU, Network, OS Health, Windows Update status
 * 🎮 **Enhanced GPU Testing** — Multi-GPU support, NVIDIA/AMD vendor tools, display configuration
+* 📝 **Enhanced Network Testing** — Link status, speed, MAC addresses, etc
 * 🔧 **Tool Integrity Verification** — Digital signature checking for Sysinternals tools
 * 🗂️ **Smart Reporting** — timestamped **Summary** + **Detailed** TXT reports with actionable recommendations
 * 📦 **Fully Portable** — run from USB; no installation required
