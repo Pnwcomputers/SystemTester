@@ -119,6 +119,23 @@ if not exist "%SCRIPT_DIR%\Sysinternals" (
     timeout /t 2 >nul
 )
 
+:: Check for PSPing specifically (for network speed tests)
+if exist "%SCRIPT_DIR%\Sysinternals\psping.exe" (
+    echo [INFO] PSPing detected - Full network speed tests available
+) else (
+    echo [INFO] PSPing not found - Basic network tests only
+    echo       Download Sysinternals Suite for full network testing
+)
+echo.
+
+:: Check for Sysinternals folder
+if not exist "%SCRIPT_DIR%\Sysinternals" (
+    echo [WARNING] Sysinternals folder not found!
+    echo Use Menu Option 5 to download automatically.
+    echo.
+    timeout /t 2 >nul
+)
+
 :MENU
 cls
 echo ========================================================
@@ -242,6 +259,8 @@ set "DOWNLOAD_URL=https://download.sysinternals.com/files/SysinternalsSuite.zip"
 echo This will download ~35MB from Microsoft.
 echo Target: %SYSINT_DIR%
 echo.
+echo NOTE: Includes PSPing for advanced network speed testing
+echo.
 set /p "confirm=Proceed? (Y/N): "
 if /i not "%confirm%"=="Y" goto MENU
 
@@ -282,6 +301,15 @@ echo.
 set "TOOL_COUNT=0"
 for %%F in ("%SYSINT_DIR%\*.exe") do set /a TOOL_COUNT+=1
 echo [SUCCESS] %TOOL_COUNT% tools installed in %SYSINT_DIR%
+echo.
+
+:: Check specifically for PSPing
+if exist "%SYSINT_DIR%\psping.exe" (
+    echo [SUCCESS] PSPing installed - Network speed tests enabled!
+) else (
+    echo [WARNING] PSPing not found - Basic network tests only
+)
+
 echo.
 echo TIP: Use Menu Option 4 to verify tool integrity
 echo.
@@ -617,11 +645,17 @@ echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
 echo    Extract to: %SCRIPT_DIR%\Sysinternals\
 echo.
 echo 5. MEMORY SHOWS 100%% (but Task Manager shows less)
-echo    This was a bug in v2.08 - FIXED in v2.2
+echo    This was a bug in v2.08 - FIXED in v2.1+
 echo.
-echo 6. TESTS TAKE TOO LONG
+echo 6. NETWORK SPEED TESTS LIMITED
+echo    Cause: PSPing.exe not found
+echo    Solution: Download Sysinternals Suite (Option 5)
+echo    PSPing enables: Bandwidth testing, TCP latency
+echo.
+echo 7. TESTS TAKE TOO LONG
 echo    Expected durations:
 echo    - CPU Test: 10 seconds
+echo    - Network Speed: 30-60 seconds
 echo    - Energy Report: 15 seconds
 echo    - Windows Update: 30-90 seconds
 echo    - DISM/SFC: 5-15 minutes each
@@ -640,6 +674,14 @@ echo --------------------------------------------------------
 echo FEATURES:
 echo --------------------------------------------------------
 echo.
+echo NETWORK SPEED TESTING (NEW):
+echo   - Gateway connectivity tests
+echo   - Internet endpoint testing (Google, Cloudflare, MS)
+echo   - Latency measurements to multiple servers
+echo   - PSPing bandwidth capacity testing
+echo   - DNS resolution speed testing
+echo   - MTU path discovery
+echo.
 echo REPORT TYPES:
 echo   Clean Report - Summary with key findings
 echo   Detailed Report - Full output from all tests
@@ -648,12 +690,6 @@ echo TOOL VERIFICATION:
 echo   Checks digital signatures of all tools
 echo   Validates file sizes
 echo   Identifies Microsoft-signed vs others
-echo.
-echo GPU TESTING:
-echo   Enhanced multi-GPU support
-echo   NVIDIA-SMI integration
-echo   AMD driver detection
-echo   GPU-Z download assistant
 echo.
 echo ADMIN DETECTION:
 echo   Auto-elevates on startup
@@ -669,7 +705,7 @@ goto MENU
 :EXIT
 echo.
 echo ========================================================
-echo Thank you for using PNW Computers' Portable Sysinternals System Tester!
+echo Thank you for using Portable Sysinternals System Tester!
 echo                    Version %SCRIPT_VERSION%
 echo ========================================================
 echo.

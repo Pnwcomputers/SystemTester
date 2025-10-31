@@ -1,12 +1,21 @@
-# 🧰 Portable Sysinternals System Tester (v2.1)
+# 🧰 Portable Sysinternals System Tester v2.2
 
-**Thumb-drive friendly, Windows hardware health check toolkit using Sysinternals applications**
+**Thumb-drive friendly, no-install Windows hardware health check toolkit** powered by **Sysinternals** and **PowerShell**.
 
-A no-install PowerShell solution that runs a curated set of **Sysinternals** and Windows hardware diagnostics tools, then produces: **Clean Summary Report** (human-readable, de-noised) and **Detailed Report** (cleaned tool outputs). Perfect for **field diagnostics**, **baseline health checks**, and **handoff reports** to clients.
+A zero-dependency **PowerShell solution** that runs a comprehensive, curated set of Sysinternals and Windows diagnostic tools. It then processes the raw data to produce two essential reports: a **Clean Summary Report** (human-readable, de-noised, with recommendations) and a **Detailed Report** (cleaned tool outputs).
+
+**The essential utility for:**
+* Field diagnostics and client handoff reports.
+* Establishing a system baseline health check.
+* Quickly identifying performance bottlenecks.
 
 ---
 
-## ✨ Key Features
+## 🚀 NEW in v2.2: Advanced Network Speed & Latency Testing
+
+Version 2.2 introduces a complete **Network Speed Test Suite** (Menu Option 8) for in-depth connectivity and performance analysis, integrated directly into the clean reporting system.
+
+### Key New Capabilities:
 
 * 🖱️ **One-click Menu or Autorun** — interactive menu or `-AutoRun` parameter
 * 🧹 **Output Cleaner** — removes banners, EULA text, usage blocks for readable reports
@@ -60,7 +69,7 @@ A no-install PowerShell solution that runs a curated set of **Sysinternals** and
 
 ## 🚀 Quick Start
 
-### **Option A: Batch Launcher (Recommended)**
+### Option A: Batch Launcher (Recommended)
 
 1. Download or clone this repository
 2. Run `SystemTester.bat` (will request admin elevation)
@@ -69,7 +78,7 @@ A no-install PowerShell solution that runs a curated set of **Sysinternals** and
 5. Choose **Option 1** for interactive menu or **Option 2** to run all tests
 6. Reports are saved in the script directory
 
-### **Option B: Direct PowerShell**
+### Option B: Direct PowerShell
 
 ```powershell
 # Interactive menu
@@ -102,7 +111,7 @@ For enhanced GPU testing:
 | 4 | **Storage Testing** | Drives, fragmentation, performance, SMART data | `du`, `contig`, `streams`, read/write tests |
 | 5 | **Process Analysis** | Running processes, handles, process tree | `pslist`, `handle` |
 | 6 | **Security Analysis** | Autorun entries, startup items | `autorunsc` |
-| 7 | **Network Analysis** | Active connections, adapter info | `netstat`, `Get-NetAdapter` |
+| 7 | **FULL Network Analysis** | Active connections, adapter info | `netstat`, `Get-NetAdapter`, `psping`,`Test-NetConncetion` |
 | 8 | **OS Health** | System file integrity, component store | `DISM`, `SFC` |
 | 9 | **Storage SMART** | Drive health, reliability counters | `Get-PhysicalDisk`, WMI SMART |
 | 10 | **SSD TRIM** | TRIM enablement status | `fsutil` |
@@ -248,67 +257,22 @@ When you select GPU testing in the PowerShell menu, you can:
 
 ---
 
-## 📋 What's New in Version 2.1
+## 📋 What's New in Version 2.2
 
-### ✅ Enhanced GPU Testing
-* **Multi-GPU Support** - Detects and tests all installed graphics cards
-* **Display Configuration** - Monitor details, manufacturer, model, serial numbers
-* **Enhanced Driver Info** - Provider, signer, INF files, installation date
-* **DirectX Diagnostics** - Improved parsing of dxdiag output
-* **OpenGL Detection** - Registry-based OpenGL driver information
-* **GPU Capabilities** - DWM composition, hardware-accelerated GPU scheduling, DirectX feature levels
-* **NVIDIA Integration** - nvidia-smi metrics (temperature, utilization, memory, power, clocks)
-* **AMD Support** - Registry-based AMD GPU and driver detection
-* **GPU Memory Testing** - VRAM capacity and usage via performance counters
-* **GPU-Z Integration** - Optional integration with GPU-Z for detailed monitoring
+### Key New Capabilities:
 
-### ✅ GPU Tools Manager (Batch Menu Option 6)
-* GPU-Z download assistant with browser launcher
-* NVIDIA nvidia-smi verification and testing
-* AMD driver detection and information
-* Comprehensive tool recommendations (FurMark, 3DMark, Unigine, etc.)
-* Safety warnings for stress testing tools
-
-### ✅ Enhanced Recommendations Engine
-* **Storage Health** - SMART warnings, drive failure detection
-* **Storage Performance** - Speed analysis (< 50 MB/s = critical, < 100 MB/s = warning)
-* **Storage Capacity** - Free space warnings (< 10% = critical, < 20% = warning)
-* **SSD TRIM** - Detection and fix commands for disabled TRIM
-* **Network Speed** - Slow adapter detection (10/100 Mbps warnings)
-* **Network Connectivity** - No active adapter detection
-* **Windows Update** - Pending update counts with severity levels
-* **OS Health** - DISM/SFC corruption detection with fix commands
-* **Hardware Errors** - WHEA event log analysis
-* **CPU Performance** - Slow performance detection
-* **GPU Drivers** - Outdated driver warnings (> 1 year old)
-* **Battery Health** - Energy report references for laptops
-* **Overall Health** - Multiple test failure detection
-
-### ✅ Tool Integrity Verification (Batch Menu Option 4)
-* Digital signature verification for all Sysinternals tools
-* File size validation to detect corrupt downloads
-* Distinguishes Microsoft-signed vs. other valid signatures
-* Summary statistics with actionable recommendations
-
-### ✅ Other Improvements
-* Launcher awareness detection (knows if launched via batch file)
-* Fixed memory usage calculation bug (KB to GB conversion)
-* Improved error messages throughout
-* Better path length warnings (Windows 260 character limit)
-* Enhanced help system with troubleshooting guide
-* Dual report system (Clean Summary + Detailed)
+| Feature | Description |
+| :--- | :--- |
+| **Local Connectivity** | Tests local network, default gateway reachability (`Test-NetConnection`). |
+| **Internet Reachability** | Connectivity tests to multiple endpoints (Google DNS, Cloudflare DNS, Google.com, Microsoft.com). Includes port-specific testing (DNS 53, HTTPS 443). |
+| **Latency Testing** | Detailed ping tests to multiple targets with round-trip time measurements. |
+| **PSPing Integration** | Advanced latency and TCP bandwidth capacity testing for connection quality analysis (requires `psping.exe` in Sysinternals folder). |
+| **DNS Resolution Speed** | Measures DNS lookup speed for multiple domains in milliseconds. |
+| **Network MTU Discovery** | Checks for standard MTU (1500 bytes) without fragmentation to help identify network configuration issues. |
 
 ---
 
 ## 🗺️ Roadmap
-
-### Version 2.2
-* Temperature monitoring (CPU, GPU, drives via WMI)
-* Advanced GPU stress testing integration
-* Report history viewer in launcher
-* Old report cleanup functionality
-* Configuration file support (JSON) for test customization
-* Performance comparison mode (vs. previous tests)
 
 ### Version 2.3
 * HTML report export with charts and graphs
