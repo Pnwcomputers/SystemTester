@@ -501,6 +501,135 @@ function Test-Network {
     } catch {
         Write-Host "Error getting network info" -ForegroundColor Red
     }
+
+    Test-NetworkSpeed
+    Test-NetworkLatency
+}
+
+function Test-NetworkSpeed {
+    Write-Host "`n=== Network Speed Test ===" -ForegroundColor Green
+
+    $outputLines = @()
+    $status = "SUCCESS"
+    $durationMs = 0
+
+    # Gather link speed information for active adapters
+    try {
+        $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq "Up" }
+        if ($adapters) {
+            $outputLines += "Active Link Speeds:"
+            foreach ($adapter in $adapters) {
+                $outputLines += "  $($adapter.Name): $($adapter.LinkSpeed)"
+            }
+        } else {
+            $outputLines += "Active Link Speeds: No active adapters detected"
+        }
+    } catch {
+        $status = "FAILED"
+        $outputLines += "Active Link Speeds: Unable to query adapters ($($_.Exception.Message))"
+    }
+
+    # Perform an outbound download test to estimate internet throughput
+    $tempFile = $null
+    try {
+        $testUrl = "https://speed.hetzner.de/10MB.bin"
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        Write-Host "Running internet download test (~10MB)..." -ForegroundColor Yellow
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Invoke-WebRequest -Uri $testUrl -OutFile $tempFile -UseBasicParsing -TimeoutSec 120 | Out-Null
+        $stopwatch.Stop()
+
+        $fileInfo = Get-Item $tempFile
+        $sizeBytes = [double]$fileInfo.Length
+        $duration = [math]::Max($stopwatch.Elapsed.TotalSeconds, 0.001)
+        $sizeMB = [math]::Round($sizeBytes / 1MB, 2)
+        $mbps = [math]::Round((($sizeBytes * 8) / 1MB) / $duration, 2)
+        $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+
+        $outputLines += "Internet Download Test:"
+        $outputLines += "  URL: $testUrl"
+        $outputLines += "  File Size: $sizeMB MB"
+        $outputLines += "  Time: $([math]::Round($duration,2)) sec"
+        $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
+        $durationMs = [math]::Round($stopwatch.Elapsed.TotalMilliseconds)
+    } catch {
+        if ($status -ne "FAILED") { $status = "FAILED" }
+        $outputLines += "Internet Download Test: Failed - $($_.Exception.Message)"
+    } finally {
+        if ($tempFile -and (Test-Path $tempFile)) {
+            Remove-Item $tempFile -ErrorAction SilentlyContinue
+        }
+    }
+
+    $script:TestResults += @{
+        Tool="Network-SpeedTest"; Description="Local link speed and download throughput"
+        Status=$status; Output=($outputLines -join "`n"); Duration=$durationMs
+    }
+}
+
+function Test-NetworkLatency {
+    Write-Host "`n=== Network Latency (Test-NetConnection & PsPing) ===" -ForegroundColor Green
+
+    $targetHost = "8.8.8.8"
+    $targetPort = 443
+    $lines = @("Target: $targetHost:$targetPort")
+    $status = "SUCCESS"
+
+    # Built-in Test-NetConnection results
+    try {
+        $tnc = Test-NetConnection -ComputerName $targetHost -Port $targetPort -InformationLevel Detailed
+        if ($tnc) {
+            $lines += "Test-NetConnection:"
+            $lines += "  Ping Succeeded: $($tnc.PingSucceeded)"
+            if ($tnc.PingReplyDetails) {
+                $lines += "  Ping RTT: $($tnc.PingReplyDetails.RoundtripTime) ms"
+            }
+            $lines += "  TCP Succeeded: $($tnc.TcpTestSucceeded)"
+        }
+    } catch {
+        $status = "FAILED"
+        $lines += "Test-NetConnection: Failed - $($_.Exception.Message)"
+    }
+
+    # Sysinternals PsPing results
+    try {
+        $pspingPath = Join-Path $SysinternalsPath "psping.exe"
+        if (Test-Path $pspingPath) {
+            $args = @("-accepteula", "-n", "5", "$targetHost:$targetPort")
+            Write-Host "Running PsPing latency test..." -ForegroundColor Yellow
+            $pspingOutput = & $pspingPath $args 2>&1 | Out-String
+            $lines += "PsPing Summary:"
+
+            $average = $null
+            $minimum = $null
+            $maximum = $null
+            foreach ($line in $pspingOutput -split "`r?`n") {
+                if ($line -match "Minimum = ([\d\.]+)ms, Maximum = ([\d\.]+)ms, Average = ([\d\.]+)ms") {
+                    $minimum = [double]$matches[1]
+                    $maximum = [double]$matches[2]
+                    $average = [double]$matches[3]
+                }
+            }
+
+            if ($average -ne $null) {
+                $lines += "  Min: $minimum ms"
+                $lines += "  Max: $maximum ms"
+                $lines += "  Avg: $average ms"
+            } else {
+                $lines += "  Unable to parse latency results"
+            }
+        } else {
+            $lines += "PsPing Summary: psping.exe not found in Sysinternals folder"
+        }
+    } catch {
+        $status = "FAILED"
+        $lines += "PsPing Summary: Failed - $($_.Exception.Message)"
+    }
+
+    $script:TestResults += @{
+        Tool="Network-Latency"; Description="Connectivity latency tests"
+        Status=$status; Output=($lines -join "`n"); Duration=0
+    }
 }
 
 # Test: OS Health
@@ -1067,7 +1196,24 @@ function Test-WindowsUpdate {
 
         try {
             $result = $searcher.Search("IsInstalled=0")
-            $lines += "Pending: $($result.Updates.Count)"
+            $pendingCount = $result.Updates.Count
+            $lines += "Pending: $pendingCount"
+
+            if ($pendingCount -gt 0) {
+                $lines += "Pending Updates:"
+                $maxList = 10
+                for ($i = 0; $i -lt [math]::Min($pendingCount, $maxList); $i++) {
+                    $update = $result.Updates.Item($i)
+                    $classification = ($update.Categories | Select-Object -First 1).Name
+                    if (-not $classification) { $classification = "Unspecified" }
+                    $lines += "  - $($update.Title) [$classification]"
+                }
+                if ($pendingCount -gt $maxList) {
+                    $lines += "  ... ($($pendingCount - $maxList) additional updates not listed)"
+                }
+            } else {
+                $lines += "Pending Updates: None"
+            }
         } catch {
             $lines += "Search failed: $($_.Exception.Message)"
         }
@@ -1171,6 +1317,27 @@ function Generate-Report {
         }
     }
 
+    $netSpeed = $TestResults | Where-Object {$_.Tool -eq "Network-SpeedTest"} | Select-Object -Last 1
+    if ($netSpeed) {
+        $cleanReport += ""
+        $cleanReport += "NETWORK SPEED:"
+        $netSpeed.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
+    }
+
+    $netLatency = $TestResults | Where-Object {$_.Tool -eq "Network-Latency"} | Select-Object -Last 1
+    if ($netLatency) {
+        $cleanReport += ""
+        $cleanReport += "NETWORK LATENCY:"
+        $netLatency.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
+    }
+
+    $updateInfo = $TestResults | Where-Object {$_.Tool -eq "Windows-Update"} | Select-Object -Last 1
+    if ($updateInfo) {
+        $cleanReport += ""
+        $cleanReport += "WINDOWS UPDATE:"
+        $updateInfo.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
+    }
+
     # ========================================
     # ENHANCED RECOMMENDATIONS ENGINE
     # ========================================
@@ -1225,6 +1392,34 @@ function Generate-Report {
             $recommendations += "• INFO: Moderate disk performance (likely HDD)"
             $recommendations += "  → Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
             $recommendations += "  → Consider SSD upgrade for 3-5x speed improvement"
+        }
+    }
+
+    # === NETWORK PERFORMANCE ===
+    if ($netSpeed -and $netSpeed.Output -match "Throughput: ([\d\.]+) Mbps") {
+        $throughputMbps = [float]$matches[1]
+        if ($throughputMbps -lt 25) {
+            $recommendations += "• WARNING: Internet throughput appears slow ($throughputMbps Mbps)"
+            $recommendations += "  → Verify ISP plan and router performance"
+            $recommendations += "  → Re-test when fewer applications are consuming bandwidth"
+        }
+    }
+
+    if ($netLatency -and $netLatency.Output -match "Avg: ([\d\.]+) ms") {
+        $avgLatency = [float]$matches[1]
+        if ($avgLatency -gt 100) {
+            $recommendations += "• NOTICE: High network latency detected (Avg $avgLatency ms)"
+            $recommendations += "  → Check local network congestion"
+            $recommendations += "  → Contact ISP if latency persists"
+        }
+    }
+
+    if ($updateInfo -and $updateInfo.Output -match "Pending: (\d+)") {
+        $pendingUpdates = [int]$matches[1]
+        if ($pendingUpdates -gt 0) {
+            $recommendations += "• ACTION: $pendingUpdates Windows update(s) pending installation"
+            $recommendations += "  → Install updates via Settings > Windows Update"
+            $recommendations += "  → Reboot system after installation completes"
         }
     }
 
