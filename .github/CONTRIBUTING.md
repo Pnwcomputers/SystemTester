@@ -2,6 +2,15 @@
 
 Thank you for your interest in contributing to DeployWorkstation! This document provides guidelines and information for contributors.
 
+## 📚 Table of Contents
+- [🎯 Ways to Contribute](#-ways-to-contribute)
+- [🔄 Development Process](#-development-process)
+- [📋 Code Review Process](#-code-review-process)
+- [🏷️ Commit Message Format](#-commit-message-format)
+- [🔒 Security Issues](#-security-issues)
+- [📞 Getting Help](#-getting-help)
+- [🙏 Recognition](#-recognition)
+
 ## 🎯 Ways to Contribute
 
 ### 🐛 Bug Reports
@@ -52,6 +61,16 @@ Thank you for your interest in contributing to DeployWorkstation! This document 
 - Test both domain and workgroup environments
 - Verify offline functionality
 - Check with different hardware configurations
+- Use virtual machines or sandbox environments when possible
+- Validate behavior with and without admin rights
+- Test with missing or partial Sysinternals tools to confirm graceful degradation
+
+## ✅ Pull Request Checklist
+- [ ] Code follows PowerShell style guidelines
+- [ ] New functionality includes tests
+- [ ] Documentation is updated
+- [ ] Changes tested on Windows 10 and 11
+- [ ] No sensitive data included
 
 ## 📋 Code Review Process
 
@@ -63,13 +82,13 @@ Thank you for your interest in contributing to DeployWorkstation! This document 
 
 ## 🏷️ Commit Message Format
 
-## Use conventional commits format:
+Use conventional commits format:
+
 Examples:
-type(scope): description
-feat(installer): add support for custom MSI packages
-fix(logging): resolve log file permission issues
-docs(readme): update installation instructions
-test(core): add unit tests for bloatware removal
+- `feat(installer): add support for custom MSI packages`
+- `fix(logging): resolve log file permission issues`
+- `docs(readme): update installation instructions`
+- `test(core): add unit tests for bloatware removal`
 
 ## 🔒 Security Issues
 
@@ -92,5 +111,4 @@ Contributors will be recognized in:
 - README.md for major features
 - GitHub contributors page
 
-Thank you for helping make DeployWorkstation better!
-EOF
+We’re excited to collaborate with you! Whether it’s a typo fix or a new feature, your contribution makes a difference.
