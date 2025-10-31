@@ -1,6 +1,6 @@
-# Contributing to DeployWorkstation
+# Contributing to SystemTester
 
-Thank you for your interest in contributing to DeployWorkstation! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to SystemTester! This document provides guidelines and information for contributors.
 
 ## 📚 Table of Contents
 - [🎯 Ways to Contribute](#-ways-to-contribute)
