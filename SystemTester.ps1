@@ -245,7 +245,7 @@ function Initialize-Environment {
 }
 
 # Clean tool output
-function Clean-ToolOutput {
+function Convert-ToolOutput {
     param([string]$ToolName, [string]$RawOutput)
     if (!$RawOutput) { return "" }
 
@@ -284,10 +284,11 @@ function Clean-ToolOutput {
 }
 
 # Run tool
-function Run-Tool {
+function Invoke-Tool {
     param(
         [string]$ToolName,
-        [string]$Args = "",
+        [Alias('Args')]
+        [string]$ArgumentList = "",
         [string]$Description = "",
         [bool]$RequiresAdmin = $false
     )
@@ -311,13 +312,13 @@ function Run-Tool {
     try {
         $start = Get-Date
         if ($ToolName -in @("psinfo","pslist","handle","autorunsc","testlimit","contig")) {
-            $Args = "-accepteula $Args"
+            $ArgumentList = "-accepteula $ArgumentList"
         }
 
-        $argArray = if ($Args.Trim()) { $Args.Split(' ') | Where-Object { $_ } } else { @() }
+        $argArray = if ($ArgumentList.Trim()) { $ArgumentList.Split(' ') | Where-Object { $_ } } else { @() }
         $rawOutput = & $toolPath $argArray 2>&1 | Out-String
         $duration = ((Get-Date) - $start).TotalMilliseconds
-        $cleanOutput = Clean-ToolOutput -ToolName $ToolName -RawOutput $rawOutput
+        $cleanOutput = Convert-ToolOutput -ToolName $ToolName -RawOutput $rawOutput
 
         $script:TestResults += @{
             Tool=$ToolName; Description=$Description
@@ -337,8 +338,8 @@ function Run-Tool {
 # Test: System Info
 function Test-SystemInfo {
     Write-Host "`n=== System Information ===" -ForegroundColor Green
-    Run-Tool -ToolName "psinfo" -Args "-h -s -d" -Description "System information"
-    Run-Tool -ToolName "clockres" -Description "Clock resolution"
+    Invoke-Tool -ToolName "psinfo" -ArgumentList "-h -s -d" -Description "System information"
+    Invoke-Tool -ToolName "clockres" -Description "Clock resolution"
 
     try {
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
@@ -364,7 +365,7 @@ RAM: $([math]::Round($cs.TotalPhysicalMemory/1GB,2)) GB
 # Test: CPU
 function Test-CPU {
     Write-Host "`n=== CPU Testing ===" -ForegroundColor Green
-    Run-Tool -ToolName "coreinfo" -Args "-v -f -c" -Description "CPU architecture"
+    Invoke-Tool -ToolName "coreinfo" -ArgumentList "-v -f -c" -Description "CPU architecture"
 
     try {
         $cpu = Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1
@@ -458,7 +459,7 @@ function Test-Storage {
         Write-Host "Error getting storage info" -ForegroundColor Red
     }
 
-    Run-Tool -ToolName "du" -Args "-l 2 C:\" -Description "Disk usage C:"
+        Invoke-Tool -ToolName "du" -ArgumentList "-l 2 C:\" -Description "Disk usage C:"
 
     # Disk performance test
     Write-Host "Running disk test..." -ForegroundColor Yellow
@@ -473,7 +474,7 @@ function Test-Storage {
         $writeTime = ((Get-Date) - $writeStart).TotalMilliseconds
 
         $readStart = Get-Date
-        $content = Get-Content $testFile -Raw -ErrorAction Stop
+        $null = Get-Content $testFile -Raw -ErrorAction Stop
         $readTime = ((Get-Date) - $readStart).TotalMilliseconds
 
         Remove-Item $testFile -ErrorAction Stop
@@ -494,14 +495,14 @@ function Test-Storage {
 # Test: Processes
 function Test-Processes {
     Write-Host "`n=== Process Analysis ===" -ForegroundColor Green
-    Run-Tool -ToolName "pslist" -Args "-t" -Description "Process tree"
-    Run-Tool -ToolName "handle" -Args "-p explorer" -Description "Explorer handles"
+    Invoke-Tool -ToolName "pslist" -ArgumentList "-t" -Description "Process tree"
+    Invoke-Tool -ToolName "handle" -ArgumentList "-p explorer" -Description "Explorer handles"
 }
 
 # Test: Security
 function Test-Security {
     Write-Host "`n=== Security Analysis ===" -ForegroundColor Green
-    Run-Tool -ToolName "autorunsc" -Args "-a -c" -Description "Autorun entries" -RequiresAdmin $true
+    Invoke-Tool -ToolName "autorunsc" -ArgumentList "-a -c" -Description "Autorun entries" -RequiresAdmin $true
 }
 
 # Test: Network
@@ -611,9 +612,9 @@ function Test-NetworkLatency {
     try {
         $pspingPath = Join-Path $SysinternalsPath "psping.exe"
         if (Test-Path $pspingPath) {
-            $args = @("-accepteula", "-n", "5", "{0}:{1}" -f $targetHost, $targetPort)
+            $pspingArgs = @("-accepteula", "-n", "5", "{0}:{1}" -f $targetHost, $targetPort)
             Write-Host "Running PsPing latency test..." -ForegroundColor Yellow
-            $pspingOutput = & $pspingPath $args 2>&1 | Out-String
+            $pspingOutput = & $pspingPath $pspingArgs 2>&1 | Out-String
             $lines += "PsPing Summary:"
 
             $average = $null
@@ -627,7 +628,7 @@ function Test-NetworkLatency {
                 }
             }
 
-            if ($average -ne $null) {
+            if ($null -ne $average) {
                 $lines += "  Min: $minimum ms"
                 $lines += "  Max: $maximum ms"
                 $lines += "  Avg: $average ms"
@@ -1298,7 +1299,7 @@ function Test-WindowsUpdate {
 
 # Generate Dual Reports (Clean + Detailed) - ENHANCED VERSION
 # Replace the entire Generate-Report function in SystemTester.ps1 (around line 1260)
-function Generate-Report {
+function New-Report {
     Write-Host "`nGenerating reports..." -ForegroundColor Cyan
 
     # Test write access
@@ -1737,9 +1738,14 @@ function Show-Menu {
     Write-Host "10. SSD TRIM Status"
     Write-Host "11. Network Adapters"
     Write-Host "12. GPU (Enhanced)" -ForegroundColor Cyan
+    <#
     Write-Host "    └─ 12a. Basic GPU Info"
     Write-Host "    └─ 12b. Vendor-Specific (NVIDIA/AMD)"
     Write-Host "    └─ 12c. GPU Memory Test"
+    #>
+    Write-Host "    - 12a. Basic GPU Info"
+    Write-Host "    - 12b. Vendor-Specific (NVIDIA/AMD)"
+    Write-Host "    - 12c. GPU Memory Test"
     Write-Host "13. Power/Battery"
     Write-Host "14. Hardware Events (WHEA)"
     Write-Host "15. Windows Update"
@@ -1802,7 +1808,7 @@ function Start-Menu {
                 Write-Host "`nAll tests complete!" -ForegroundColor Green
                 Read-Host "Press Enter"
             }
-            "17" { Generate-Report; Read-Host "`nPress Enter" }
+            "17" { New-Report; Read-Host "`nPress Enter" }
             "18" { $script:TestResults = @(); Write-Host "Cleared" -ForegroundColor Green; Start-Sleep 1 }
             "Q"  { return }
             "q"  { return }
@@ -1833,7 +1839,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             Test-StorageSMART; Test-Trim; Test-NIC
             Test-GPU; Test-GPUVendorSpecific; Test-GPUMemory
             Test-Power; Test-HardwareEvents; Test-WindowsUpdate
-            Generate-Report
+            New-Report
             Write-Host "`nAuto-run complete!" -ForegroundColor Green
             Read-Host "Press Enter to exit"
         } else {
