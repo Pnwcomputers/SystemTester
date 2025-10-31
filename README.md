@@ -573,9 +573,9 @@ For security vulnerabilities or sensitive findings:
 ![GitHub issues](https://img.shields.io/github/issues/Pnwcomputers/SystemTester)
 ![GitHub license](https://img.shields.io/github/license/Pnwcomputers/SystemTester)
 
-**🎯 Transform your Windows deployment process from hours to minutes!**
+**🎯 Transform your Windows diagnostics from a step-by-step process to AUTOMATED with FULL REPORTING!**
 
-Built with ❤️ for efficiency, reliability, and zero-touch automation.
+Built with ❤️ for efficiency, reliability, and a goal of close to zero-touch automation.
 
 [⭐ Star this repo](https://github.com/Pnwcomputers/SystemTester) if it saved you time and effort!
 
