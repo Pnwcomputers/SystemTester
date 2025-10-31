@@ -18,9 +18,9 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
 
 ---
 
-## 🚀 NEW in v2.2: Enhanced GPU Testing & Critical Bug Fixes
+## 🚀 NEW in v2.2: Enhanced GPU Testing, Advanced Network Suite & Critical Bug Fixes
 
-Version 2.2 introduces comprehensive GPU testing capabilities and fixes several critical bugs that prevented the script from running properly.
+Version 2.2 introduces comprehensive GPU testing capabilities, advanced network speed/latency testing, and fixes several critical bugs that prevented the script from running properly.
 
 ### Key New Capabilities:
 
@@ -28,7 +28,8 @@ Version 2.2 introduces comprehensive GPU testing capabilities and fixes several 
 * 🧹 **Output Cleaner** — removes banners, EULA text, usage blocks for readable reports
 * 🧠 **Comprehensive Tests** — CPU, RAM, Disk, GPU, Network, OS Health, Windows Update status
 * 🎮 **Enhanced GPU Testing** — Multi-GPU support, NVIDIA/AMD vendor tools, display configuration
-* 📝 **Enhanced Network Testing** — Link status, speed, MAC addresses, etc
+* 🌐 **Advanced Network Speed Suite** — Complete connectivity, latency, DNS, MTU, and bandwidth testing
+* 📝 **Enhanced Network Testing** — Link status, speed, IP/MAC addresses, PSPing integration
 * 🔧 **Tool Integrity Verification** — Digital signature checking for Sysinternals tools
 * 🗂️ **Smart Reporting** — timestamped **Summary** + **Detailed** TXT reports with actionable recommendations
 * 📦 **Fully Portable** — run from USB; no installation required
@@ -106,6 +107,7 @@ Version 2.2 introduces comprehensive GPU testing capabilities and fixes several 
 │   ├── pslist.exe
 │   ├── handle.exe
 │   ├── autorunsc.exe
+│   ├── psping.exe              # For advanced network latency testing
 │   └── ... (60+ other tools)
 ├── 📂 Tools/                    # GPU testing tools (optional)
 │   └── GPU-Z.exe               # Downloaded via Option 6
@@ -156,22 +158,31 @@ For enhanced GPU testing:
 |---|----------|-------------|----------------|
 | 1 | **System Information** | OS details, computer info, clock resolution | `psinfo`, `clockres`, CIM queries |
 | 2 | **CPU Testing** | Architecture, performance benchmarks, top processes | `coreinfo`, stress test, process analysis |
-| 3 | **RAM Testing** | Memory capacity, modules, usage patterns | CIM queries, performance counters |
-| 4 | **Storage Testing** | Drives, fragmentation, performance, SMART data | `du`, read/write tests |
+| 3 | **RAM Testing** | Memory capacity, modules, usage patterns | CIM queries, `testlimit`, performance counters |
+| 4 | **Storage Testing** | Drives, fragmentation, performance, SMART data | `du`, `contig`, `streams`, read/write tests |
 | 5 | **Process Analysis** | Running processes, handles, process tree | `pslist`, `handle` |
 | 6 | **Security Analysis** | Autorun entries, startup items | `autorunsc` |
-| 7 | **Network Analysis** | Active connections, adapter info | `netstat`, `Get-NetAdapter` |
+| 7 | **Network Analysis** | Connectivity, latency, DNS, bandwidth, MTU | `netstat`, `Get-NetAdapter`, `psping`, `Test-NetConnection` |
 | 8 | **OS Health** | System file integrity, component store | `DISM`, `SFC` |
-| 9 | **Storage SMART** | Drive health, reliability counters | `Get-PhysicalDisk` |
+| 9 | **Storage SMART** | Drive health, reliability counters | `Get-PhysicalDisk`, WMI SMART |
 | 10 | **SSD TRIM** | TRIM enablement status | `fsutil` |
-| 11 | **Network Adapters** | Link status, speed, MAC addresses | `Get-NetAdapter` |
-| 12 | **GPU (Enhanced)** | Multi-GPU info, vendor tools, memory | CIM, `dxdiag`, `nvidia-smi` |
+| 11 | **Network Adapters** | Link status, speed, IP/MAC addresses | `Get-NetAdapter`, `Get-NetIPConfiguration` |
+| 12 | **GPU (Enhanced)** | Multi-GPU info, vendor tools, memory | CIM, `dxdiag`, `nvidia-smi`, GPU-Z |
 | 12a | **Basic GPU Info** | Details, displays, drivers, DirectX, OpenGL | CIM queries, `dxdiag` |
 | 12b | **Vendor-Specific** | NVIDIA/AMD metrics, temperatures, utilization | `nvidia-smi`, AMD registry |
 | 12c | **GPU Memory** | VRAM capacity, usage, performance counters | CIM, performance counters |
 | 13 | **Power/Battery** | Battery health, energy report | `powercfg`, WMI Battery |
 | 14 | **Hardware Events** | WHEA error logs (last 7 days) | Event Viewer (WHEA-Logger) |
 | 15 | **Windows Update** | Pending updates, history, service status | Windows Update COM API |
+
+### Network Speed Test Suite (Option 7) Features:
+
+* **Local Connectivity** — Tests local network and default gateway reachability (`Test-NetConnection`)
+* **Internet Reachability** — Connectivity tests to multiple endpoints (Google DNS, Cloudflare DNS, Google.com, Microsoft.com) with port-specific testing (DNS 53, HTTPS 443)
+* **Latency Testing** — Detailed ping tests to multiple targets with round-trip time measurements
+* **PSPing Integration** — Advanced latency and TCP bandwidth capacity testing for connection quality analysis (requires `psping.exe` in Sysinternals folder)
+* **DNS Resolution Speed** — Measures DNS lookup speed for multiple domains in milliseconds
+* **Network MTU Discovery** — Checks for standard MTU (1500 bytes) without fragmentation to help identify network configuration issues
 
 ---
 
@@ -304,8 +315,8 @@ When you select GPU testing in the PowerShell menu, you can:
 
 ### Tests taking too long
 **Expected:** Some tests are intentionally slow:
-- CPU Performance: 30 seconds
-- Power/Energy Report: 20 seconds (admin only)
+- CPU Performance: 10-30 seconds
+- Power/Energy Report: 15-20 seconds (admin only)
 - Windows Update Search: 30-90 seconds
 - DISM/SFC Scans: 5-15 minutes each (admin only)
 - DirectX Diagnostics (dxdiag): Up to 50 seconds
@@ -330,6 +341,7 @@ When you select GPU testing in the PowerShell menu, you can:
 
 | Feature | Description |
 | :--- | :--- |
+| **Advanced Network Speed Suite** | Complete connectivity, latency, DNS resolution, PSPing bandwidth, and MTU testing |
 | **Tool Integrity Verification** | Check digital signatures and validate file sizes of Sysinternals tools |
 | **Enhanced GPU Testing** | Multi-GPU support, vendor-specific tools (NVIDIA/AMD), display configuration |
 | **GPU Tools Manager** | New batch menu option for managing GPU testing utilities |
@@ -358,6 +370,8 @@ When you select GPU testing in the PowerShell menu, you can:
 * Enhanced recommendations engine with more actionable advice
 * Improved GPU driver age detection with fallback handling
 * Better COM object lifecycle management
+* Network testing now includes comprehensive connectivity analysis
+* PSPing integration for advanced latency and bandwidth testing
 
 ---
 
@@ -368,7 +382,7 @@ When you select GPU testing in the PowerShell menu, you can:
 * Baseline comparison mode (compare current vs. previous tests)
 * Skip flags (`-SkipCPU`, `-SkipNetwork`, etc.)
 * CSV export for data analysis
-* Network throughput testing (PSPing integration)
+* Enhanced network throughput testing (extended PSPing integration)
 * Memory leak detection
 * Audio device testing
 * Intel Arc GPU support
@@ -443,6 +457,7 @@ Contributions welcome! Areas of interest:
 * **Parsers:** New tool output cleaners
 * **Tests:** Additional diagnostic modules (audio, peripherals, temperatures)
 * **GPU Tools:** Additional vendor integrations (Intel Arc, etc.)
+* **Network Tools:** Additional connectivity and performance tests
 * **Performance:** Optimization of slow operations
 * **Documentation:** Tutorial videos, screenshots, wiki articles
 * **Testing:** Pester unit tests, integration tests
@@ -466,6 +481,7 @@ Contributions welcome! Areas of interest:
 - [ ] Missing Sysinternals tools
 - [ ] Menu Option 4 (Tool Verification)
 - [ ] Menu Option 6 (GPU Tools Manager)
+- [ ] Network connectivity tests (various network conditions)
 
 ---
 
@@ -549,11 +565,13 @@ For security vulnerabilities or sensitive findings:
 - ✅ Added GPU-Z size validation
 - ✅ Improved error handling throughout
 - ✅ Fixed memory leak in Windows Update test
+- ✅ Enhanced network testing suite with PSPing integration
 
 ### v2.2 (Original) - January 2025
 - Added GPU testing enhancements
 - Added tool integrity verification
 - Added dual report system
+- Added advanced network speed testing
 
 ### v2.1 - December 2024
 - Fixed memory usage calculation bug
@@ -583,6 +601,7 @@ Built with ❤️ for efficiency, reliability, and a goal of close to zero-touch
 ---
 
 *Tested on Windows 10 (1909+) and Windows 11 - Enterprise, Pro, and Home editions*
+
 **Last Updated:** January 2025 | **Version:** 2.2 (FIXED) | **Status:** Production Ready
 
 **⚠️ IMPORTANT:** Always use the `_FIXED` versions of the files for proper operation.
