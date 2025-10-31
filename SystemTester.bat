@@ -78,16 +78,9 @@ echo.
 set "SCRIPT_DIR=%cd%"
 set "DRIVE_LETTER=%~d0"
 
-:: Locate PowerShell script (supports legacy and _FIXED names)
-set "SCRIPT_PS1="
-set "SCRIPT_PS1_NAME="
-if exist "%SCRIPT_DIR%\SystemTester_FIXED.ps1" (
-    set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester_FIXED.ps1"
-    set "SCRIPT_PS1_NAME=SystemTester_FIXED.ps1"
-) else if exist "%SCRIPT_DIR%\SystemTester.ps1" (
-    set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
-    set "SCRIPT_PS1_NAME=SystemTester.ps1"
-)
+:: Locate PowerShell script (single supported name)
+set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
+set "SCRIPT_PS1_NAME=SystemTester.ps1"
 
 :: Check path length
 for /f %%i in ('powershell -NoProfile -Command "('%SCRIPT_DIR%').Length" 2^>nul') do set "PATH_LENGTH=%%i"
@@ -249,11 +242,13 @@ set "VERIFY_CODE=%errorlevel%"
 echo.
 if "%VERIFY_CODE%"=="0" (
     echo Verification complete. All tools validated successfully.
-) else if "%VERIFY_CODE%"=="2" (
-    echo [WARNING] Verification completed with issues detected. Review output above.
-    echo         Use Menu Option 5 to re-download the Sysinternals Suite.
 ) else (
-    echo [ERROR] Verification encountered an issue. Review output above.
+    if "%VERIFY_CODE%"=="2" (
+        echo [WARNING] Verification completed with issues detected. Review output above.
+        echo         Use Menu Option 5 to re-download the Sysinternals Suite.
+    ) else (
+        echo [ERROR] Verification encountered an issue. Review output above.
+    )
 )
 echo.
 pause
