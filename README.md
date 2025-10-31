@@ -1,4 +1,4 @@
-# 🧰 Portable Sysinternals System Tester v2.2 (FIXED)
+# 🧰 Portable Sysinternals System Tester v2.21 (BLEEDING EDGE - TRIAL)
 
 ![Automation Level](https://img.shields.io/badge/Automation-Zero%20Touch-green)
 ![Windows Support](https://img.shields.io/badge/Windows-10%20%7C%2011-blue)
