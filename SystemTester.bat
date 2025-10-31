@@ -55,7 +55,7 @@ echo.
 
 set "_ELEV_ARGS=/elevated"
 if "%ST_DEBUG%"=="1" set "_ELEV_ARGS=/elevated debug"
-echo [%DATE% %TIME%] Elevating: "%~f0" %_ELEV_ARGS% ^>^> "%LAUNCH_LOG%"
+if "%ST_DEBUG%"=="1" echo [%DATE% %TIME%] Elevating: "%~f0" %_ELEV_ARGS% >> "%LAUNCH_LOG%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%_ELEV_ARGS%' -Verb RunAs -WorkingDirectory '%CD%' -WindowStyle Normal"
 
 if errorlevel 1 (
@@ -121,7 +121,9 @@ if "%SCRIPT_PS1%"=="" (
 
 echo Using PowerShell script: %SCRIPT_PS1_NAME%
 if "%ST_DEBUG%"=="1" (
-    echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" ^(exists: ^<^%SCRIPT_PS1%^^?^) >> "%LAUNCH_LOG%"
+    set "_EX=NO"
+    if exist "%SCRIPT_PS1%" set "_EX=YES"
+    >> "%LAUNCH_LOG%" echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" (exists: !_EX!)
 )
 echo.
 
@@ -738,3 +740,15 @@ echo   - energy-report.html (if power test ran)
 echo.
 pause
 exit /b 0
+if not exist "%SCRIPT_PS1%" (
+    echo [ERROR] PowerShell script not found at: %SCRIPT_PS1%
+    if "%ST_DEBUG%"=="1" >> "%LAUNCH_LOG%" echo [%DATE% %TIME%] ERROR: PS1 missing at "%SCRIPT_PS1%"
+    pause
+    goto MENU
+)
+if not exist "%SCRIPT_PS1%" (
+    echo [ERROR] PowerShell script not found at: %SCRIPT_PS1%
+    if "%ST_DEBUG%"=="1" >> "%LAUNCH_LOG%" echo [%DATE% %TIME%] ERROR: PS1 missing at "%SCRIPT_PS1%"
+    pause
+    goto MENU
+)
