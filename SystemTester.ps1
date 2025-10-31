@@ -268,7 +268,7 @@ function Convert-ToolOutput {
 }
 
 # Run tool
-function Run-Tool {
+function Invoke-Tool {
     param(
         [string]$ToolName,
         [Alias('Args')]
@@ -296,13 +296,13 @@ function Run-Tool {
     try {
         $start = Get-Date
         if ($ToolName -in @("psinfo","pslist","handle","autorunsc","testlimit","contig")) {
-            $Args = "-accepteula $Args"
+            $ArgumentList = "-accepteula $ArgumentList"
         }
 
-        $argArray = if ($Args.Trim()) { $Args.Split(' ') | Where-Object { $_ } } else { @() }
+        $argArray = if ($ArgumentList.Trim()) { $ArgumentList.Split(' ') | Where-Object { $_ } } else { @() }
         $rawOutput = & $toolPath $argArray 2>&1 | Out-String
         $duration = ((Get-Date) - $start).TotalMilliseconds
-        $cleanOutput = Clean-ToolOutput -ToolName $ToolName -RawOutput $rawOutput
+        $cleanOutput = Convert-ToolOutput -ToolName $ToolName -RawOutput $rawOutput
 
         $script:TestResults += @{
             Tool=$ToolName; Description=$Description
