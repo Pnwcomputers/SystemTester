@@ -28,11 +28,10 @@ fltmc >nul 2>&1 && goto :ADMIN_CONFIRMED
 :: Not admin - check if this is retry after elevation attempt
 if /i "%_ELEV_FLAG%"=="/elevated" (
     echo.
-    echo [ERROR] Elevation failed or was cancelled.
-    echo         Right-click and choose "Run as administrator"
+    echo [WARNING] Admin status could not be verified after elevation.
+    echo           Continuing anyway; some tests may be limited.
     echo.
-    pause
-    exit /b 1
+    goto :ADMIN_CONFIRMED
 )
 
 :: Request elevation
