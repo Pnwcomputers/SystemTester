@@ -588,7 +588,7 @@ function Test-NetworkLatency {
 
     $targetHost = "8.8.8.8"
     $targetPort = 443
-    $lines = @("Target: $targetHost:$targetPort")
+    $lines = @("Target: $($targetHost):$targetPort")
     $status = "SUCCESS"
 
     # Built-in Test-NetConnection results
@@ -611,7 +611,7 @@ function Test-NetworkLatency {
     try {
         $pspingPath = Join-Path $SysinternalsPath "psping.exe"
         if (Test-Path $pspingPath) {
-            $args = @("-accepteula", "-n", "5", "$targetHost:$targetPort")
+            $args = @("-accepteula", "-n", "5", "{0}:{1}" -f $targetHost, $targetPort)
             Write-Host "Running PsPing latency test..." -ForegroundColor Yellow
             $pspingOutput = & $pspingPath $args 2>&1 | Out-String
             $lines += "PsPing Summary:"
