@@ -229,7 +229,7 @@ function Initialize-Environment {
 }
 
 # Clean tool output
-function Clean-ToolOutput {
+function Convert-ToolOutput {
     param([string]$ToolName, [string]$RawOutput)
     if (!$RawOutput) { return "" }
 
@@ -271,7 +271,8 @@ function Clean-ToolOutput {
 function Run-Tool {
     param(
         [string]$ToolName,
-        [string]$Args = "",
+        [Alias('Args')]
+        [string]$ArgumentList = "",
         [string]$Description = "",
         [bool]$RequiresAdmin = $false
     )
@@ -321,8 +322,8 @@ function Run-Tool {
 # Test: System Info
 function Test-SystemInfo {
     Write-Host "`n=== System Information ===" -ForegroundColor Green
-    Run-Tool -ToolName "psinfo" -Args "-h -s -d" -Description "System information"
-    Run-Tool -ToolName "clockres" -Description "Clock resolution"
+    Invoke-Tool -ToolName "psinfo" -ArgumentList "-h -s -d" -Description "System information"
+    Invoke-Tool -ToolName "clockres" -Description "Clock resolution"
 
     try {
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
@@ -348,7 +349,7 @@ RAM: $([math]::Round($cs.TotalPhysicalMemory/1GB,2)) GB
 # Test: CPU
 function Test-CPU {
     Write-Host "`n=== CPU Testing ===" -ForegroundColor Green
-    Run-Tool -ToolName "coreinfo" -Args "-v -f -c" -Description "CPU architecture"
+    Invoke-Tool -ToolName "coreinfo" -ArgumentList "-v -f -c" -Description "CPU architecture"
 
     try {
         $cpu = Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1
@@ -442,7 +443,7 @@ function Test-Storage {
         Write-Host "Error getting storage info" -ForegroundColor Red
     }
 
-    Run-Tool -ToolName "du" -Args "-l 2 C:\" -Description "Disk usage C:"
+        Invoke-Tool -ToolName "du" -ArgumentList "-l 2 C:\" -Description "Disk usage C:"
 
     # Disk performance test
     Write-Host "Running disk test..." -ForegroundColor Yellow
@@ -457,7 +458,7 @@ function Test-Storage {
         $writeTime = ((Get-Date) - $writeStart).TotalMilliseconds
 
         $readStart = Get-Date
-        $content = Get-Content $testFile -Raw -ErrorAction Stop
+        $null = Get-Content $testFile -Raw -ErrorAction Stop
         $readTime = ((Get-Date) - $readStart).TotalMilliseconds
 
         Remove-Item $testFile -ErrorAction Stop
@@ -478,14 +479,14 @@ function Test-Storage {
 # Test: Processes
 function Test-Processes {
     Write-Host "`n=== Process Analysis ===" -ForegroundColor Green
-    Run-Tool -ToolName "pslist" -Args "-t" -Description "Process tree"
-    Run-Tool -ToolName "handle" -Args "-p explorer" -Description "Explorer handles"
+    Invoke-Tool -ToolName "pslist" -ArgumentList "-t" -Description "Process tree"
+    Invoke-Tool -ToolName "handle" -ArgumentList "-p explorer" -Description "Explorer handles"
 }
 
 # Test: Security
 function Test-Security {
     Write-Host "`n=== Security Analysis ===" -ForegroundColor Green
-    Run-Tool -ToolName "autorunsc" -Args "-a -c" -Description "Autorun entries" -RequiresAdmin $true
+    Invoke-Tool -ToolName "autorunsc" -ArgumentList "-a -c" -Description "Autorun entries" -RequiresAdmin $true
 }
 
 # Test: Network
@@ -500,6 +501,135 @@ function Test-Network {
         Write-Host "Network: $connections connections" -ForegroundColor Green
     } catch {
         Write-Host "Error getting network info" -ForegroundColor Red
+    }
+
+    Test-NetworkSpeed
+    Test-NetworkLatency
+}
+
+function Test-NetworkSpeed {
+    Write-Host "`n=== Network Speed Test ===" -ForegroundColor Green
+
+    $outputLines = @()
+    $status = "SUCCESS"
+    $durationMs = 0
+
+    # Gather link speed information for active adapters
+    try {
+        $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq "Up" }
+        if ($adapters) {
+            $outputLines += "Active Link Speeds:"
+            foreach ($adapter in $adapters) {
+                $outputLines += "  $($adapter.Name): $($adapter.LinkSpeed)"
+            }
+        } else {
+            $outputLines += "Active Link Speeds: No active adapters detected"
+        }
+    } catch {
+        $status = "FAILED"
+        $outputLines += "Active Link Speeds: Unable to query adapters ($($_.Exception.Message))"
+    }
+
+    # Perform an outbound download test to estimate internet throughput
+    $tempFile = $null
+    try {
+        $testUrl = "https://speed.hetzner.de/10MB.bin"
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        Write-Host "Running internet download test (~10MB)..." -ForegroundColor Yellow
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Invoke-WebRequest -Uri $testUrl -OutFile $tempFile -UseBasicParsing -TimeoutSec 120 | Out-Null
+        $stopwatch.Stop()
+
+        $fileInfo = Get-Item $tempFile
+        $sizeBytes = [double]$fileInfo.Length
+        $duration = [math]::Max($stopwatch.Elapsed.TotalSeconds, 0.001)
+        $sizeMB = [math]::Round($sizeBytes / 1MB, 2)
+        $mbps = [math]::Round((($sizeBytes * 8) / 1MB) / $duration, 2)
+        $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+
+        $outputLines += "Internet Download Test:"
+        $outputLines += "  URL: $testUrl"
+        $outputLines += "  File Size: $sizeMB MB"
+        $outputLines += "  Time: $([math]::Round($duration,2)) sec"
+        $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
+        $durationMs = [math]::Round($stopwatch.Elapsed.TotalMilliseconds)
+    } catch {
+        if ($status -ne "FAILED") { $status = "FAILED" }
+        $outputLines += "Internet Download Test: Failed - $($_.Exception.Message)"
+    } finally {
+        if ($tempFile -and (Test-Path $tempFile)) {
+            Remove-Item $tempFile -ErrorAction SilentlyContinue
+        }
+    }
+
+    $script:TestResults += @{
+        Tool="Network-SpeedTest"; Description="Local link speed and download throughput"
+        Status=$status; Output=($outputLines -join "`n"); Duration=$durationMs
+    }
+}
+
+function Test-NetworkLatency {
+    Write-Host "`n=== Network Latency (Test-NetConnection & PsPing) ===" -ForegroundColor Green
+
+    $targetHost = "8.8.8.8"
+    $targetPort = 443
+    $lines = @("Target: $($targetHost):$targetPort")
+    $status = "SUCCESS"
+
+    # Built-in Test-NetConnection results
+    try {
+        $tnc = Test-NetConnection -ComputerName $targetHost -Port $targetPort -InformationLevel Detailed
+        if ($tnc) {
+            $lines += "Test-NetConnection:"
+            $lines += "  Ping Succeeded: $($tnc.PingSucceeded)"
+            if ($tnc.PingReplyDetails) {
+                $lines += "  Ping RTT: $($tnc.PingReplyDetails.RoundtripTime) ms"
+            }
+            $lines += "  TCP Succeeded: $($tnc.TcpTestSucceeded)"
+        }
+    } catch {
+        $status = "FAILED"
+        $lines += "Test-NetConnection: Failed - $($_.Exception.Message)"
+    }
+
+    # Sysinternals PsPing results
+    try {
+        $pspingPath = Join-Path $SysinternalsPath "psping.exe"
+        if (Test-Path $pspingPath) {
+            $pspingArgs = @("-accepteula", "-n", "5", "{0}:{1}" -f $targetHost, $targetPort)
+            Write-Host "Running PsPing latency test..." -ForegroundColor Yellow
+            $pspingOutput = & $pspingPath $pspingArgs 2>&1 | Out-String
+            $lines += "PsPing Summary:"
+
+            $average = $null
+            $minimum = $null
+            $maximum = $null
+            foreach ($line in $pspingOutput -split "`r?`n") {
+                if ($line -match "Minimum = ([\d\.]+)ms, Maximum = ([\d\.]+)ms, Average = ([\d\.]+)ms") {
+                    $minimum = [double]$matches[1]
+                    $maximum = [double]$matches[2]
+                    $average = [double]$matches[3]
+                }
+            }
+
+            if ($null -ne $average) {
+                $lines += "  Min: $minimum ms"
+                $lines += "  Max: $maximum ms"
+                $lines += "  Avg: $average ms"
+            } else {
+                $lines += "  Unable to parse latency results"
+            }
+        } else {
+            $lines += "PsPing Summary: psping.exe not found in Sysinternals folder"
+        }
+    } catch {
+        $status = "FAILED"
+        $lines += "PsPing Summary: Failed - $($_.Exception.Message)"
+    }
+
+    $script:TestResults += @{
+        Tool="Network-Latency"; Description="Connectivity latency tests"
+        Status=$status; Output=($lines -join "`n"); Duration=0
     }
 }
 
@@ -570,9 +700,20 @@ function Test-Trim {
         }
         $txt = $map.GetEnumerator() | ForEach-Object {
             $status = if ($_.Value -eq "0") { "Enabled" } else { "Disabled" }
-            "$($_.Key): $status"
+            "$($_.Key): TRIM $status"
         }
         if (-not $txt) { $txt = @("TRIM status unknown") }
+
+        if ($map.Count -gt 0) {
+            $enabledCount = ($map.GetEnumerator() | Where-Object { $_.Value -eq "0" }).Count
+            if ($enabledCount -eq $map.Count) {
+                $txt += "Overall: TRIM is ENABLED"
+            } elseif ($enabledCount -eq 0) {
+                $txt += "Overall: TRIM is DISABLED"
+            } else {
+                $txt += "Overall: TRIM mixed (check per-filesystem status)"
+            }
+        }
 
         $script:TestResults += @{
             Tool="SSD-TRIM"; Description="TRIM status"
@@ -842,17 +983,25 @@ function Test-GPU {
         $gpus = Get-CimInstance Win32_VideoController
         foreach ($gpu in $gpus) {
             if ($gpu.Name) {
-                $year = if ($gpu.DriverDate) { 
-                    ([DateTime]$gpu.DriverDate).Year 
-                } else { 
-                    2020 
+                $driverYear = $null
+                if ($gpu.DriverDate) {
+                    try {
+                        $driverYear = ([DateTime]$gpu.DriverDate).Year
+                    } catch {
+                        $driverYear = $null
+                    }
                 }
-                
-                $featureLevel = if ($year -ge 2020) { "12_x" } 
-                               elseif ($year -ge 2016) { "12_0" }
-                               elseif ($year -ge 2012) { "11_0" }
+
+                if (-not $driverYear) {
+                    # Fall back to a conservative default if parsing fails
+                    $driverYear = 2014
+                }
+
+                $featureLevel = if ($driverYear -ge 2020) { "12_x" }
+                               elseif ($driverYear -ge 2016) { "12_0" }
+                               elseif ($driverYear -ge 2012) { "11_0" }
                                else { "10_x" }
-                
+
                 $capabilities += "$($gpu.Name): Likely supports DirectX $featureLevel"
             }
         }
@@ -907,23 +1056,43 @@ function Test-GPUVendorSpecific {
     
     # Check for AMD
     try {
-        $amdRegistry = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000"
-        
-        if (Test-Path $amdRegistry) {
-            $amdInfo = Get-ItemProperty $amdRegistry -ErrorAction Stop
-            
-            $amdOutput = @()
-            $amdOutput += "AMD GPU Detected"
-            $amdOutput += "Driver Description: $($amdInfo.DriverDesc)"
-            $amdOutput += "Driver Version: $($amdInfo.DriverVersion)"
-            $amdOutput += "Driver Date: $($amdInfo.DriverDate)"
-            
-            if ($amdInfo.DriverDesc -match "AMD|Radeon") {
+        $amdClassRoot = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+
+        if (Test-Path $amdClassRoot) {
+            $amdOutputs = @()
+            $detected = $false
+
+            $subKeys = Get-ChildItem $amdClassRoot -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match "^\d{4}$" }
+            foreach ($subKey in $subKeys) {
+                try {
+                    $amdInfo = Get-ItemProperty $subKey.PSPath -ErrorAction Stop
+                } catch {
+                    continue
+                }
+
+                if ($amdInfo.DriverDesc -and $amdInfo.DriverDesc -match "AMD|Radeon") {
+                    $detected = $true
+                    $amdOutputs += "AMD GPU Slot $($subKey.PSChildName)"
+                    $amdOutputs += "Driver Description: $($amdInfo.DriverDesc)"
+                    if ($amdInfo.DeviceDesc) { $amdOutputs += "Device: $($amdInfo.DeviceDesc)" }
+                    if ($amdInfo.DriverVersion) { $amdOutputs += "Driver Version: $($amdInfo.DriverVersion)" }
+                    if ($amdInfo.DriverDate) { $amdOutputs += "Driver Date: $($amdInfo.DriverDate)" }
+                    $amdOutputs += ""
+                }
+            }
+
+            if ($detected) {
                 $script:TestResults += @{
                     Tool="AMD-GPU"; Description="AMD GPU information"
-                    Status="SUCCESS"; Output=($amdOutput -join "`n"); Duration=100
+                    Status="SUCCESS"; Output=($amdOutputs -join "`n"); Duration=150
                 }
                 Write-Host "AMD GPU information collected" -ForegroundColor Green
+            } else {
+                Write-Host "AMD GPU not detected" -ForegroundColor DarkGray
+                $script:TestResults += @{
+                    Tool="AMD-GPU"; Description="AMD GPU information"
+                    Status="SKIPPED"; Output="No AMD GPU detected"; Duration=0
+                }
             }
         } else {
             Write-Host "AMD GPU not detected" -ForegroundColor DarkGray
@@ -1052,6 +1221,8 @@ function Test-HardwareEvents {
 function Test-WindowsUpdate {
     Write-Host "`n=== Windows Update ===" -ForegroundColor Green
     $updateSession = $null
+    $searcher = $null
+    $result = $null
     try {
         $lines = @()
         try {
@@ -1067,7 +1238,24 @@ function Test-WindowsUpdate {
 
         try {
             $result = $searcher.Search("IsInstalled=0")
-            $lines += "Pending: $($result.Updates.Count)"
+            $pendingCount = $result.Updates.Count
+            $lines += "Pending: $pendingCount"
+
+            if ($pendingCount -gt 0) {
+                $lines += "Pending Updates:"
+                $maxList = 10
+                for ($i = 0; $i -lt [math]::Min($pendingCount, $maxList); $i++) {
+                    $update = $result.Updates.Item($i)
+                    $classification = ($update.Categories | Select-Object -First 1).Name
+                    if (-not $classification) { $classification = "Unspecified" }
+                    $lines += "  - $($update.Title) [$classification]"
+                }
+                if ($pendingCount -gt $maxList) {
+                    $lines += "  ... ($($pendingCount - $maxList) additional updates not listed)"
+                }
+            } else {
+                $lines += "Pending Updates: None"
+            }
         } catch {
             $lines += "Search failed: $($_.Exception.Message)"
         }
@@ -1080,6 +1268,12 @@ function Test-WindowsUpdate {
     } catch {
         Write-Host "Windows Update check failed" -ForegroundColor Yellow
     } finally {
+        if ($result) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($result) | Out-Null } catch {}
+        }
+        if ($searcher) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($searcher) | Out-Null } catch {}
+        }
         if ($updateSession) {
             try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null } catch {}
         }
@@ -1089,7 +1283,7 @@ function Test-WindowsUpdate {
 
 # Generate Dual Reports (Clean + Detailed) - ENHANCED VERSION
 # Replace the entire Generate-Report function in SystemTester.ps1 (around line 1260)
-function Generate-Report {
+function New-Report {
     Write-Host "`nGenerating reports..." -ForegroundColor Cyan
 
     # Test write access
@@ -1171,6 +1365,27 @@ function Generate-Report {
         }
     }
 
+    $netSpeed = $TestResults | Where-Object {$_.Tool -eq "Network-SpeedTest"} | Select-Object -Last 1
+    if ($netSpeed) {
+        $cleanReport += ""
+        $cleanReport += "NETWORK SPEED:"
+        $netSpeed.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
+    }
+
+    $netLatency = $TestResults | Where-Object {$_.Tool -eq "Network-Latency"} | Select-Object -Last 1
+    if ($netLatency) {
+        $cleanReport += ""
+        $cleanReport += "NETWORK LATENCY:"
+        $netLatency.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
+    }
+
+    $updateInfo = $TestResults | Where-Object {$_.Tool -eq "Windows-Update"} | Select-Object -Last 1
+    if ($updateInfo) {
+        $cleanReport += ""
+        $cleanReport += "WINDOWS UPDATE:"
+        $updateInfo.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
+    }
+
     # ========================================
     # ENHANCED RECOMMENDATIONS ENGINE
     # ========================================
@@ -1225,6 +1440,34 @@ function Generate-Report {
             $recommendations += "• INFO: Moderate disk performance (likely HDD)"
             $recommendations += "  → Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
             $recommendations += "  → Consider SSD upgrade for 3-5x speed improvement"
+        }
+    }
+
+    # === NETWORK PERFORMANCE ===
+    if ($netSpeed -and $netSpeed.Output -match "Throughput: ([\d\.]+) Mbps") {
+        $throughputMbps = [float]$matches[1]
+        if ($throughputMbps -lt 25) {
+            $recommendations += "• WARNING: Internet throughput appears slow ($throughputMbps Mbps)"
+            $recommendations += "  → Verify ISP plan and router performance"
+            $recommendations += "  → Re-test when fewer applications are consuming bandwidth"
+        }
+    }
+
+    if ($netLatency -and $netLatency.Output -match "Avg: ([\d\.]+) ms") {
+        $avgLatency = [float]$matches[1]
+        if ($avgLatency -gt 100) {
+            $recommendations += "• NOTICE: High network latency detected (Avg $avgLatency ms)"
+            $recommendations += "  → Check local network congestion"
+            $recommendations += "  → Contact ISP if latency persists"
+        }
+    }
+
+    if ($updateInfo -and $updateInfo.Output -match "Pending: (\d+)") {
+        $pendingUpdates = [int]$matches[1]
+        if ($pendingUpdates -gt 0) {
+            $recommendations += "• ACTION: $pendingUpdates Windows update(s) pending installation"
+            $recommendations += "  → Install updates via Settings > Windows Update"
+            $recommendations += "  → Reboot system after installation completes"
         }
     }
 
@@ -1338,14 +1581,16 @@ function Generate-Report {
 
     # === GPU HEALTH ===
     if ($gpuDetails) {
-        if ($gpuDetails.Output -match "Driver Date:.*(\d{4})") {
-            $driverYear = [int]$matches[1]
-            $currentYear = (Get-Date).Year
-            if ($currentYear - $driverYear -gt 1) {
-                $recommendations += "• INFO: GPU drivers are over 1 year old"
-                $recommendations += "  → Update to latest drivers for best performance"
-                $recommendations += "  → NVIDIA: GeForce Experience or nvidia.com"
-                $recommendations += "  → AMD: amd.com/en/support"
+        if ($gpuDetails.Output -match "Driver Date:.*?(\d{4})") {
+            $driverYear = 0
+            if ([int]::TryParse($matches[1], [ref]$driverYear)) {
+                $currentYear = (Get-Date).Year
+                if ($currentYear - $driverYear -gt 1) {
+                    $recommendations += "• INFO: GPU drivers are over 1 year old"
+                    $recommendations += "  → Update to latest drivers for best performance"
+                    $recommendations += "  → NVIDIA: GeForce Experience or nvidia.com"
+                    $recommendations += "  → AMD: amd.com/en/support"
+                }
             }
         }
     }
@@ -1477,9 +1722,14 @@ function Show-Menu {
     Write-Host "10. SSD TRIM Status"
     Write-Host "11. Network Adapters"
     Write-Host "12. GPU (Enhanced)" -ForegroundColor Cyan
+    <#
     Write-Host "    └─ 12a. Basic GPU Info"
     Write-Host "    └─ 12b. Vendor-Specific (NVIDIA/AMD)"
     Write-Host "    └─ 12c. GPU Memory Test"
+    #>
+    Write-Host "    - 12a. Basic GPU Info"
+    Write-Host "    - 12b. Vendor-Specific (NVIDIA/AMD)"
+    Write-Host "    - 12c. GPU Memory Test"
     Write-Host "13. Power/Battery"
     Write-Host "14. Hardware Events (WHEA)"
     Write-Host "15. Windows Update"
@@ -1542,7 +1792,7 @@ function Start-Menu {
                 Write-Host "`nAll tests complete!" -ForegroundColor Green
                 Read-Host "Press Enter"
             }
-            "17" { Generate-Report; Read-Host "`nPress Enter" }
+            "17" { New-Report; Read-Host "`nPress Enter" }
             "18" { $script:TestResults = @(); Write-Host "Cleared" -ForegroundColor Green; Start-Sleep 1 }
             "Q"  { return }
             "q"  { return }
@@ -1573,7 +1823,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             Test-StorageSMART; Test-Trim; Test-NIC
             Test-GPU; Test-GPUVendorSpecific; Test-GPUMemory
             Test-Power; Test-HardwareEvents; Test-WindowsUpdate
-            Generate-Report
+            New-Report
             Write-Host "`nAuto-run complete!" -ForegroundColor Green
             Read-Host "Press Enter to exit"
         } else {

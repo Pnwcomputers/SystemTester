@@ -74,7 +74,17 @@ echo.
 :: Set paths
 set "SCRIPT_DIR=%cd%"
 set "DRIVE_LETTER=%~d0"
-set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
+
+:: Locate PowerShell script (supports legacy and _FIXED names)
+set "SCRIPT_PS1="
+set "SCRIPT_PS1_NAME="
+if exist "%SCRIPT_DIR%\SystemTester_FIXED.ps1" (
+    set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester_FIXED.ps1"
+    set "SCRIPT_PS1_NAME=SystemTester_FIXED.ps1"
+) else if exist "%SCRIPT_DIR%\SystemTester.ps1" (
+    set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
+    set "SCRIPT_PS1_NAME=SystemTester.ps1"
+)
 
 :: Check path length
 for /f %%i in ('powershell -NoProfile -Command "('%SCRIPT_DIR%').Length" 2^>nul') do set "PATH_LENGTH=%%i"
@@ -90,14 +100,21 @@ echo Path length: %PATH_LENGTH% characters
 echo.
 
 :: Verify PowerShell script exists
-if not exist "%SCRIPT_PS1%" (
-    echo [ERROR] PowerShell script not found: %SCRIPT_PS1%
+if "%SCRIPT_PS1%"=="" (
+    echo [ERROR] PowerShell script not found in: %SCRIPT_DIR%
     echo.
-    echo Ensure SystemTester.ps1 is in the same folder.
+    echo Expected one of the following files:
+    echo   - SystemTester_FIXED.ps1
+    echo   - SystemTester.ps1
+    echo.
+    echo If you renamed the script, restore one of the supported names.
     echo.
     pause
     exit /b 1
 )
+
+echo Using PowerShell script: %SCRIPT_PS1_NAME%
+echo.
 
 :: Check PowerShell version
 echo Checking PowerShell...
@@ -224,7 +241,17 @@ echo.
 pause
 echo.
 :: Call the PowerShell function for tool verification
-powershell -NoProfile -ExecutionPolicy Bypass -Command ". '%SCRIPT_PS1%'; Test-ToolVerification"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { . ""%SCRIPT_PS1%""; if (-not (Test-ToolVerification)) { exit 2 } else { exit 0 } } catch { Write-Error $_; exit 1 }"
+set "VERIFY_CODE=%errorlevel%"
+echo.
+if "%VERIFY_CODE%"=="0" (
+    echo Verification complete. All tools validated successfully.
+) else if "%VERIFY_CODE%"=="2" (
+    echo [WARNING] Verification completed with issues detected. Review output above.
+    echo         Use Menu Option 5 to re-download the Sysinternals Suite.
+) else (
+    echo [ERROR] Verification encountered an issue. Review output above.
+)
 echo.
 pause
 goto MENU
@@ -277,6 +304,13 @@ echo Extracting...
 if not exist "%SYSINT_DIR%" mkdir "%SYSINT_DIR%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%SYSINT_DIR%' -Force; Write-Host 'Extracted successfully' -ForegroundColor Green"
 
+if errorlevel 1 (
+    echo [ERROR] Extraction failed. Remove any partial files and retry.
+    if exist "%ZIP_FILE%" del "%ZIP_FILE%" 2>nul
+    pause
+    goto MENU
+)
+
 del "%ZIP_FILE%" 2>nul
 echo.
 set "TOOL_COUNT=0"
@@ -297,6 +331,7 @@ echo.
 set "GPU_TOOLS_DIR=%SCRIPT_DIR%\Tools"
 set "GPUZ_PATH=%GPU_TOOLS_DIR%\GPU-Z.exe"
 set "GPUZ_URL=https://www.techpowerup.com/gpuz/"
+set "GPUZ_SIZE="
 
 echo GPU Tools Directory: %GPU_TOOLS_DIR%
 echo.
@@ -314,7 +349,13 @@ echo --------------------------------------------------------
 echo INSTALLED TOOLS:
 echo --------------------------------------------------------
 if exist "%GPUZ_PATH%" (
-    echo [OK] GPU-Z.exe - Installed
+    for %%A in ("%GPUZ_PATH%") do set "GPUZ_SIZE=%%~zA"
+    if not defined GPUZ_SIZE set "GPUZ_SIZE=0"
+    if !GPUZ_SIZE! LSS 500000 (
+        echo [!] GPU-Z.exe - File appears incomplete (!GPUZ_SIZE! bytes)
+    ) else (
+        echo [OK] GPU-Z.exe - Installed (!GPUZ_SIZE! bytes)
+    )
 ) else (
     echo [ ] GPU-Z.exe - Not installed
 )
@@ -326,13 +367,11 @@ if exist "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe" (
 )
 
 :: Check for AMD tools
-set "AMD_FOUND="
-for %%R in ("HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000") do (
-    reg query %%R /v DriverDesc 2>nul | find /i "AMD" >nul 2>&1
-    if not errorlevel 1 set "AMD_FOUND=YES"
-)
-if defined AMD_FOUND (
-    echo [OK] AMD GPU Drivers - Installed
+set "AMD_COUNT="
+for /f %%A in ('powershell -NoProfile -Command "(Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object { Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue } | Where-Object { $_.DriverDesc -match 'AMD|Radeon' }).Count" 2^>nul') do set "AMD_COUNT=%%A"
+if not defined AMD_COUNT set "AMD_COUNT=0"
+if not "!AMD_COUNT!"=="0" (
+    echo [OK] AMD GPU Drivers - Detected (!AMD_COUNT! device^(s^))
 ) else (
     echo [ ] AMD GPU Drivers - Not detected
 )
@@ -361,7 +400,14 @@ if exist "%GPUZ_PATH%" (
     echo GPU-Z is already installed at:
     echo %GPUZ_PATH%
     echo.
-    for %%A in ("%GPUZ_PATH%") do echo Size: %%~zA bytes
+    set "GPUZ_SIZE="
+    for %%A in ("%GPUZ_PATH%") do set "GPUZ_SIZE=%%~zA"
+    if not defined GPUZ_SIZE set "GPUZ_SIZE=0"
+    echo Size: !GPUZ_SIZE! bytes
+    if !GPUZ_SIZE! LSS 500000 (
+        echo WARNING: File size is unusually small. Re-download recommended.
+        echo.
+    )
     echo.
     set /p "run_gpuz=Run GPU-Z now? (Y/N): "
     if /i "!run_gpuz!"=="Y" (
@@ -466,21 +512,16 @@ echo ========================================================
 echo.
 
 :: Check for AMD GPU
-set "AMD_FOUND="
-set "AMD_NAME="
-for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000" /v DriverDesc 2^>nul ^| find "DriverDesc"') do (
-    set "AMD_NAME=%%b"
-    echo %%b | find /i "AMD" >nul 2>&1
-    if not errorlevel 1 set "AMD_FOUND=YES"
-)
+set "AMD_COUNT="
+for /f %%A in ('powershell -NoProfile -Command "(Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object { Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue } | Where-Object { $_.DriverDesc -match 'AMD|Radeon' }).Count" 2^>nul') do set "AMD_COUNT=%%A"
+if not defined AMD_COUNT set "AMD_COUNT=0"
 
-if defined AMD_FOUND (
-    echo [OK] AMD GPU Detected: %AMD_NAME%
+if not "!AMD_COUNT!"=="0" (
+    echo [OK] AMD GPU Detected: !AMD_COUNT! device^(s^)
     echo.
     echo AMD Driver Information:
     echo ========================================================
-    reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000" /v DriverVersion 2>nul
-    reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000" /v DriverDate 2>nul
+    powershell -NoProfile -Command "Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object { $info = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue; if ($info.DriverDesc -match 'AMD|Radeon') { '{0}: {1}' -f $_.PSChildName,$info.DriverDesc; if ($info.DriverVersion) { '  Driver Version: {0}' -f $info.DriverVersion }; if ($info.DriverDate) { '  Driver Date: {0}' -f $info.DriverDate }; '' } }"
     echo ========================================================
     echo.
     echo NOTE: AMD doesn't provide a command-line tool like
