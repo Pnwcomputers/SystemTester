@@ -139,6 +139,8 @@ powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1
 powershell -ExecutionPolicy Bypass -File .\SystemTester.ps1 -AutoRun
 ```
 
+> ℹ️ **Launcher compatibility:** The batch launcher automatically detects either `SystemTester_FIXED.ps1` or the legacy `SystemTester.ps1` filename, so both naming conventions continue to work.
+
 ### **First-Time Setup**
 
 If Sysinternals tools are missing:
