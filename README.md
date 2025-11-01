@@ -559,7 +559,7 @@ For security vulnerabilities or sensitive findings:
 
 ## 📝 Version History
 
-### v2.21 (FIXED) - January 2025
+### v2.21 (FIXED) - October 2025
 - ✅ Fixed critical startup crash (missing Initialize-Environment)
 - ✅ Fixed tool verification (Menu Option 4)
 - ✅ Fixed AMD multi-GPU detection
