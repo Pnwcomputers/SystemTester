@@ -577,7 +577,6 @@ function Test-NetworkLatency {
     Write-Host "`n=== Network Latency (Test-NetConnection & PsPing) ===" -ForegroundColor Green
 
     $targetHost = "8.8.8.8"
-    $targetPort = 443
     $lines = @("Target: $($targetHost):$targetPort")
     $status = "SUCCESS"
 
