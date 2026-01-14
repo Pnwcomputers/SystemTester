@@ -575,36 +575,33 @@ function Test-NetworkSpeed {
 
 function Test-NetworkLatency {
     Write-Host "`n=== Network Latency (Test-NetConnection & PsPing) ===" -ForegroundColor Green
-
     $targetHost = "8.8.8.8"
-    $lines = @("Target: $($targetHost):$targetPort")
+    $lines = @("Target: $targetHost")
     $status = "SUCCESS"
-
-    # Built-in Test-NetConnection results
+    
+    # Built-in Test-NetConnection results (ICMP only)
     try {
-        $tnc = Test-NetConnection -ComputerName $targetHost -Port $targetPort -InformationLevel Detailed
+        $tnc = Test-NetConnection -ComputerName $targetHost -InformationLevel Detailed
         if ($tnc) {
             $lines += "Test-NetConnection:"
             $lines += "  Ping Succeeded: $($tnc.PingSucceeded)"
             if ($tnc.PingReplyDetails) {
                 $lines += "  Ping RTT: $($tnc.PingReplyDetails.RoundtripTime) ms"
             }
-            $lines += "  TCP Succeeded: $($tnc.TcpTestSucceeded)"
         }
     } catch {
         $status = "FAILED"
         $lines += "Test-NetConnection: Failed - $($_.Exception.Message)"
     }
-
-    # Sysinternals PsPing results
+    
+    # Sysinternals PsPing results (ICMP only)
     try {
         $pspingPath = Join-Path $SysinternalsPath "psping.exe"
         if (Test-Path $pspingPath) {
-            $pspingArgs = @("-accepteula", "-n", "5", "{0}:{1}" -f $targetHost, $targetPort)
+            $pspingArgs = @("-accepteula", "-n", "5", $targetHost)
             Write-Host "Running PsPing latency test..." -ForegroundColor Yellow
             $pspingOutput = & $pspingPath $pspingArgs 2>&1 | Out-String
             $lines += "PsPing Summary:"
-
             $average = $null
             $minimum = $null
             $maximum = $null
@@ -615,7 +612,6 @@ function Test-NetworkLatency {
                     $average = [double]$matches[3]
                 }
             }
-
             if ($null -ne $average) {
                 $lines += "  Min: $minimum ms"
                 $lines += "  Max: $maximum ms"
@@ -630,7 +626,7 @@ function Test-NetworkLatency {
         $status = "FAILED"
         $lines += "PsPing Summary: Failed - $($_.Exception.Message)"
     }
-
+    
     $script:TestResults += @{
         Tool="Network-Latency"; Description="Connectivity latency tests"
         Status=$status; Output=($lines -join "`n"); Duration=0
