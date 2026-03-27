@@ -1,0 +1,32 @@
+# --- SystemTester Specific ---
+# DO NOT track diagnostic reports (contains sensitive system data)
+/Reports/
+*.txt
+*.csv
+*.html
+*.json
+
+# DO NOT track the downloaded Sysinternals/GPU tools
+# (Users should download these fresh via your script)
+/Tools/
+*.exe
+*.zip
+
+# --- Windows / OS Clutter ---
+[Dd]esktop.ini
+[Tt]humbs.db
+$RECYCLE.BIN/
+*.lnk
+
+# --- PowerShell / Development ---
+.history.ndjson
+__pycache__/
+*.log
+*.err
+/docs/_site/
+
+# --- IDE / Editor Settings ---
+.vscode/
+.idea/
+*.swp
+*.bak
