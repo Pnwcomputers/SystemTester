@@ -1,18 +1,20 @@
 # --- SystemTester Specific ---
-# DO NOT track diagnostic reports (contains sensitive system data)
+# Ignore the generated reports (contains private system info!)
 /Reports/
+/Logs/
 *.txt
 *.csv
 *.html
 *.json
 
-# DO NOT track the downloaded Sysinternals/GPU tools
-# (Users should download these fresh via your script)
+# Ignore the Sysinternals binaries
+# (Users should download these fresh via the script)
 /Tools/
 *.exe
 *.zip
+*.msi
 
-# --- Windows / OS Clutter ---
+# --- Windows System Clutter ---
 [Dd]esktop.ini
 [Tt]humbs.db
 $RECYCLE.BIN/
