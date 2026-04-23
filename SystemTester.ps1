@@ -1,5 +1,5 @@
 # Portable Sysinternals System Tester
-# Created by Pacific Northwest Computers - 2025
+# Created by Pacific Northwest Computers - 2026
 # Complete Production Version - v2.4
 
 param([switch]$AutoRun)
@@ -1217,7 +1217,9 @@ function Test-Power {
         } catch { $lines += "No battery (desktop)" }
 
         if ($script:IsAdmin) {
-            $report = Join-Path $ScriptRoot "energy-report.html"
+            $reportsDir = Join-Path $ScriptRoot "Reports"
+            if (!(Test-Path $reportsDir)) { New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null }
+            $report = Join-Path $reportsDir "energy-report.html"
             Write-Host "Generating energy report ($script:ENERGY_DURATION sec)..." -ForegroundColor Yellow
             powercfg /energy /output $report /duration $script:ENERGY_DURATION 2>&1 | Out-Null
             if (Test-Path $report) {
@@ -1332,19 +1334,32 @@ function Test-WindowsUpdate {
 function New-Report {
     Write-Host "`nGenerating reports..." -ForegroundColor Cyan
 
-    # Test write access
-    $testFile = Join-Path $ScriptRoot "writetest_$([guid]::NewGuid().ToString('N')).tmp"
+    # Ensure Reports subfolder exists
+    $ReportsDir = Join-Path $ScriptRoot "Reports"
+    if (!(Test-Path $ReportsDir)) {
+        try {
+            New-Item -ItemType Directory -Path $ReportsDir -Force | Out-Null
+            Write-Host "Created Reports folder: $ReportsDir" -ForegroundColor DarkGray
+        } catch {
+            Write-Host "ERROR: Cannot create Reports folder: $ReportsDir" -ForegroundColor Red
+            Write-Host "       $($_.Exception.Message)" -ForegroundColor Red
+            return
+        }
+    }
+
+    # Test write access to Reports folder
+    $testFile = Join-Path $ReportsDir "writetest_$([guid]::NewGuid().ToString('N')).tmp"
     try {
         "test" | Out-File -FilePath $testFile -ErrorAction Stop
         Remove-Item $testFile -ErrorAction Stop
     } catch {
-        Write-Host "ERROR: Cannot write to $ScriptRoot" -ForegroundColor Red
+        Write-Host "ERROR: Cannot write to Reports folder: $ReportsDir" -ForegroundColor Red
         return
     }
 
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $cleanPath = Join-Path $ScriptRoot "SystemTest_Clean_$timestamp.txt"
-    $detailedPath = Join-Path $ScriptRoot "SystemTest_Detailed_$timestamp.txt"
+    $cleanPath = Join-Path $ReportsDir "SystemTest_Clean_$timestamp.txt"
+    $detailedPath = Join-Path $ReportsDir "SystemTest_Detailed_$timestamp.txt"
 
     # Calculate stats
     $success = ($TestResults | Where-Object {$_.Status -eq "SUCCESS"}).Count
