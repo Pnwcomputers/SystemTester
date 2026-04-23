@@ -1,5 +1,9 @@
 # Portable Sysinternals System Tester v2.4
 
+<p align="center">
+  <img src="assets/systemtester.png" alt="Thumb-drive friendly, no-install Windows hardware health check toolkit powered by Sysinternals and PowerShell." width="600"/>
+</p>
+
 ![Automation Level](https://img.shields.io/badge/Automation-Zero%20Touch-green)
 ![Windows Support](https://img.shields.io/badge/Windows-10%20%7C%2011-blue)
 ![PowerShell Version](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
