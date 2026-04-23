@@ -105,7 +105,7 @@ if "%SCRIPT_PS1%"=="" (
     echo [ERROR] PowerShell script not found in: %SCRIPT_DIR%
     echo.
     echo Expected one of the following files:
-    echo   - SystemTester_FIXED.ps1
+    echo   - SystemTester.ps1
     echo   - SystemTester.ps1
     echo.
     echo If you renamed the script, restore one of the supported names.
