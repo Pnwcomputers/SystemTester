@@ -1,11 +1,11 @@
 # Portable Sysinternals System Tester
 # Created by Pacific Northwest Computers - 2025
-# Complete Production Version - v2.22
+# Complete Production Version - v2.4
 
 param([switch]$AutoRun)
 
 # Constants
-$script:VERSION = "2.22"
+$script:VERSION = "2.4"
 $script:DXDIAG_TIMEOUT = 45
 $script:ENERGY_DURATION = 15
 $script:CPU_TEST_SECONDS = 10
