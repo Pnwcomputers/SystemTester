@@ -1,4 +1,4 @@
-# 🧰 Portable Sysinternals System Tester v2.21
+# 🧰 Portable Sysinternals System Tester v2.24 (Testing)
 
 ![Automation Level](https://img.shields.io/badge/Automation-Zero%20Touch-green)
 ![Windows Support](https://img.shields.io/badge/Windows-10%20%7C%2011-blue)
@@ -20,7 +20,7 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
 
 ## 🚀 NOW With Enhanced GPU Testing, Advanced Network Suite & Critical Bug Fixes
 
-Version 2.21 introduces comprehensive GPU testing capabilities, advanced network speed/latency testing, and fixes several critical bugs that prevented the script from running properly.
+Version 2.4 introduces comprehensive GPU testing capabilities, advanced network speed/latency testing, and fixes several critical bugs that prevented the script from running properly.
 
 ### Key New Capabilities:
 
@@ -41,7 +41,7 @@ Version 2.21 introduces comprehensive GPU testing capabilities, advanced network
 
 ---
 
-## 🐛 Critical Bug Fixes in v2.21
+## 🐛 Critical Bug Fixes in v2.4
 
 ### PowerShell Script Fixes
 
@@ -193,7 +193,7 @@ For enhanced GPU testing:
 ### Clean Summary Report
 ```
 =========================================
-  SYSTEM TEST REPORT v2.21
+  SYSTEM TEST REPORT v2.4
   CLEAN SUMMARY
 =========================================
 Date: 2025-01-03 14:30:22
@@ -289,7 +289,7 @@ When you select GPU testing in the PowerShell menu, you can:
 ### "Access denied" / Permission errors
 **Solution:** Right-click launcher and choose "Run as administrator"
 
-### Script crashes immediately on startup (v2.21 original only)
+### Script crashes immediately on startup (v2.4 original only)
 **Solution:** ✅ **FIXED** - Use `SystemTester.ps1` instead. Original had missing `Initialize-Environment` function.
 
 ### Tool verification (Menu Option 4) crashes
@@ -337,7 +337,7 @@ When you select GPU testing in the PowerShell menu, you can:
 
 ---
 
-## 📋 What's New in Version 2.21
+## 📋 What's New in Version 2.4
 
 ### Major New Features
 
@@ -521,7 +521,7 @@ For security vulnerabilities or sensitive findings:
 
 **Please include:**
 * Detailed reproduction steps
-* Affected versions (specify if original v2.21 or FIXED version)
+* Affected versions (specify if original v2.4 or FIXED version)
 * Potential impact assessment
 * Suggested remediation (if any)
 
@@ -537,7 +537,7 @@ For security vulnerabilities or sensitive findings:
 * **Commercial Support:** Contact support@pnwcomputers.com
 
 **When reporting issues, please specify:**
-- Which version you're using (original v2.21 or FIXED version)
+- Which version you're using (original v2.4 or FIXED version)
 - Operating System (Windows 10/11, build number)
 - GPU type (NVIDIA/AMD/Intel, model)
 - Whether you're running as administrator
@@ -559,7 +559,7 @@ For security vulnerabilities or sensitive findings:
 
 ## 📝 Version History
 
-### v2.21 (FIXED) - October 2025
+### v2.4 (FIXED) - October 2025
 - ✅ Fixed critical startup crash (missing Initialize-Environment)
 - ✅ Fixed tool verification (Menu Option 4)
 - ✅ Fixed AMD multi-GPU detection
@@ -604,6 +604,6 @@ Built with ❤️ for efficiency, reliability, and a goal of close to zero-touch
 
 *Tested on Windows 10 (1909+) and Windows 11 - Enterprise, Pro, and Home editions*
 
-**Last Updated:** October 2025 | **Version:** 2.21 (FIXED) | **Status:** Production Ready
+**Last Updated:** October 2025 | **Version:** 2.4 (FIXED) | **Status:** Production Ready
 
 **⚠️ IMPORTANT:** Always use the `_FIXED` versions of the files for proper operation.
