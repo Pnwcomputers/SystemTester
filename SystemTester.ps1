@@ -1,5 +1,5 @@
 # Portable Sysinternals System Tester
-# Created by Pacific Northwest Computers - 2026
+# Created by Pacific Northwest Computers - 2025
 # Complete Production Version - v2.4
 
 param([switch]$AutoRun)
