@@ -733,7 +733,7 @@ echo Thank you for using PNW Computers' Portable Sysinternals System Tester!
 echo                    Version %SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo Reports saved in: %SCRIPT_DIR%
+echo Reports saved in: %SCRIPT_DIR%\Reports\
 echo   - SystemTest_Clean_*.txt (summary)
 echo   - SystemTest_Detailed_*.txt (full output)
 echo   - energy-report.html (if power test ran)
