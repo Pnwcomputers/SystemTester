@@ -4,13 +4,13 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Production Ready Version - v2.21
+:: Production Ready Version - v2.4
 :: =====================================================
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
 set "DOWNLOAD_TIMEOUT_SEC=120"
-set "SCRIPT_VERSION=2.21"
+set "SCRIPT_VERSION=2.4"
 if not defined ST_DEBUG set "ST_DEBUG=0"
 set "LAUNCH_LOG=%TEMP%\SystemTester_launcher.log"
 
@@ -83,7 +83,7 @@ echo.
 set "SCRIPT_DIR=%cd%"
 set "DRIVE_LETTER=%~d0"
 
-:: Locate PowerShell script (single supported name)
+:: Locate PowerShell script
 set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
 set "SCRIPT_PS1_NAME=SystemTester.ps1"
 
@@ -101,14 +101,12 @@ echo Path length: %PATH_LENGTH% characters
 echo.
 
 :: Verify PowerShell script exists
-if "%SCRIPT_PS1%"=="" (
-    echo [ERROR] PowerShell script not found in: %SCRIPT_DIR%
+if not exist "%SCRIPT_PS1%" (
+    echo [ERROR] PowerShell script not found: %SCRIPT_PS1%
     echo.
-    echo Expected one of the following files:
-    echo   - SystemTester_FIXED.ps1
-    echo   - SystemTester.ps1
+    echo Expected file: SystemTester.ps1
     echo.
-    echo If you renamed the script, restore one of the supported names.
+    echo Make sure SystemTester.ps1 is in the same folder as this batch file.
     echo.
     pause
     exit /b 1
@@ -116,7 +114,7 @@ if "%SCRIPT_PS1%"=="" (
 
 echo Using PowerShell script: %SCRIPT_PS1_NAME%
 if "%ST_DEBUG%"=="1" (
-    echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" ^(exists: ^<^%SCRIPT_PS1%^^?^) >> "%LAUNCH_LOG%"
+    echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" >> "%LAUNCH_LOG%"
 )
 echo.
 
@@ -248,20 +246,10 @@ echo of all Sysinternals tools in your installation.
 echo.
 pause
 echo.
-:: Call the PowerShell function for tool verification
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { . ""%SCRIPT_PS1%""; if (-not (Test-ToolVerification)) { exit 2 } else { exit 0 } } catch { Write-Error $_; exit 1 }"
-set "VERIFY_CODE=%errorlevel%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { . ""%SCRIPT_PS1%""; Test-ToolVerification } catch { Write-Error $_; exit 1 }"
 echo.
-if "%VERIFY_CODE%"=="0" (
-    echo Verification complete. All tools validated successfully.
-) else (
-    if "%VERIFY_CODE%"=="2" (
-        echo [WARNING] Verification completed with issues detected. Review output above.
-        echo         Use Menu Option 5 to re-download the Sysinternals Suite.
-    ) else (
-        echo [ERROR] Verification encountered an issue. Review output above.
-    )
-)
+echo Verification complete. Review output above.
+echo If issues were found, use Menu Option 5 to re-download.
 echo.
 pause
 goto MENU
@@ -284,7 +272,24 @@ if /i not "%confirm%"=="Y" goto MENU
 
 echo.
 echo Downloading...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue; $p = @{ Uri = '%DOWNLOAD_URL%'; OutFile = '%ZIP_FILE%' }; if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $p.UseBasicParsing = $true }; if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec')) { $p.TimeoutSec = %DOWNLOAD_TIMEOUT_SEC% }; Invoke-WebRequest @p; Write-Host 'Download complete' -ForegroundColor Green } catch { Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
+:: FIX v2.4: Added SSL bypass callback to handle VPN/proxy environments (e.g. Mullvad, Tailscale)
+::           that perform TLS interception, which previously caused download failures.
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$ProgressPreference='SilentlyContinue';" ^
+    "try {" ^
+    "  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;" ^
+    "  [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true };" ^
+    "  $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue;" ^
+    "  $p = @{ Uri = '%DOWNLOAD_URL%'; OutFile = '%ZIP_FILE%' };" ^
+    "  if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $p.UseBasicParsing = $true };" ^
+    "  if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec')) { $p.TimeoutSec = %DOWNLOAD_TIMEOUT_SEC% };" ^
+    "  Invoke-WebRequest @p;" ^
+    "  [Net.ServicePointManager]::ServerCertificateValidationCallback = $null;" ^
+    "  Write-Host 'Download complete' -ForegroundColor Green" ^
+    "} catch {" ^
+    "  [Net.ServicePointManager]::ServerCertificateValidationCallback = $null;" ^
+    "  Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red; exit 1" ^
+    "}"
 
 if errorlevel 1 (
     echo.
@@ -351,7 +356,7 @@ echo --------------------------------------------------------
 echo.
 echo 1. GPU-Z (TechPowerUp) - Detailed GPU monitoring
 echo 2. Check NVIDIA Drivers/Tools
-echo 3. Check AMD Drivers/Tools  
+echo 3. Check AMD Drivers/Tools
 echo 4. Download Recommendations
 echo 5. Return to Main Menu
 echo.
@@ -639,13 +644,14 @@ echo ========================================================
 echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo NEW IN v2.21:
-echo   - Tool integrity verification (digital signatures)
-echo   - Dual report system (Clean + Detailed)
-echo   - Fixed memory usage calculation bug
-echo   - Launcher awareness detection
-echo   - Enhanced GPU testing with vendor-specific tools
-echo   - GPU Tools Manager (Menu Option 6)
+echo NEW IN v2.4:
+echo   - Fixed Test-NetConnection port=0 error (latency test)
+echo   - Fixed SSL/TLS download failure under VPN/proxy (Mullvad, Tailscale)
+echo   - Multiple fallback URLs for internet speed test
+echo   - Fixed PsPing latency parsing (flexible regex)
+echo   - Virtual/VPN adapters no longer flagged as slow NICs
+echo   - Report files now use ASCII encoding (no more garbled bullets)
+echo   - Removed stale legacy script name reference
 echo.
 echo --------------------------------------------------------
 echo COMMON ISSUES:
@@ -661,14 +667,17 @@ echo 3. TOOLS MAY BE CORRUPTED
 echo    Solution: Use Menu Option 4 to verify integrity
 echo              Then Option 5 to re-download if needed
 echo.
-echo 4. DOWNLOAD FAILS
-echo    Causes: Firewall, proxy, no internet
-echo    Solution: Manual download from:
+echo 4. DOWNLOAD FAILS (SSL/TLS error)
+echo    Cause: VPN or proxy performing TLS inspection
+echo    This is auto-handled in v2.4 for most cases.
+echo    Manual fallback:
 echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
 echo    Extract to: %SCRIPT_DIR%\Sysinternals\
 echo.
-echo 5. MEMORY SHOWS 100%% (but Task Manager shows less)
-echo    This was a bug in v2.08 - FIXED in v2.21
+echo 5. NETWORK SPEED TEST FAILS
+echo    Cause: Firewall, VPN, or no internet
+echo    v2.4 tries 3 different servers automatically.
+echo    If all fail, check firewall/proxy settings.
 echo.
 echo 6. TESTS TAKE TOO LONG
 echo    Expected durations:
@@ -724,7 +733,7 @@ echo Thank you for using PNW Computers' Portable Sysinternals System Tester!
 echo                    Version %SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo Reports saved in: %SCRIPT_DIR%
+echo Reports saved in: %SCRIPT_DIR%\Reports\
 echo   - SystemTest_Clean_*.txt (summary)
 echo   - SystemTest_Detailed_*.txt (full output)
 echo   - energy-report.html (if power test ran)

@@ -1,11 +1,11 @@
 # Portable Sysinternals System Tester
 # Created by Pacific Northwest Computers - 2025
-# Complete Production Version - v2.21
+# Complete Production Version - v2.4
 
 param([switch]$AutoRun)
 
 # Constants
-$script:VERSION = "2.21"
+$script:VERSION = "2.4"
 $script:DXDIAG_TIMEOUT = 45
 $script:ENERGY_DURATION = 15
 $script:CPU_TEST_SECONDS = 10
@@ -530,41 +530,76 @@ function Test-NetworkSpeed {
         $outputLines += "Active Link Speeds: Unable to query adapters ($($_.Exception.Message))"
     }
 
-    # Perform an outbound download test to estimate internet throughput
+    # FIX: Multiple fallback URLs + SSL bypass for VPN/proxy environments (e.g. Mullvad)
+    # Tries each URL in order, stops on first success.
+    $testUrls = @(
+        "https://speed.cloudflare.com/__down?bytes=10000000"  # Cloudflare - most reliable
+        "http://speed.hetzner.de/10MB.bin"                    # HTTP fallback - no SSL issues
+        "https://proof.ovh.net/files/10Mb.dat"               # OVH fallback
+    )
+
     $tempFile = $null
-    try {
-        $testUrl = "https://speed.hetzner.de/10MB.bin"
-        $tempFile = [System.IO.Path]::GetTempFileName()
-        Write-Host "Running internet download test (~10MB)..." -ForegroundColor Yellow
-        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        # Use compatible parameters across PowerShell versions
-        $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
-        $iwParams = @{ Uri = $testUrl; OutFile = $tempFile }
-        if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $iwParams.UseBasicParsing = $true }
-        if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec')) { $iwParams.TimeoutSec = 120 }
-        Invoke-WebRequest @iwParams | Out-Null
-        $stopwatch.Stop()
+    $downloadDone = $false
+    $prevCallback = $null
 
-        $fileInfo = Get-Item $tempFile
-        $sizeBytes = [double]$fileInfo.Length
-        $duration = [math]::Max($stopwatch.Elapsed.TotalSeconds, 0.001)
-        $sizeMB = [math]::Round($sizeBytes / 1MB, 2)
-        $mbps = [math]::Round((($sizeBytes * 8) / 1MB) / $duration, 2)
-        $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+    foreach ($testUrl in $testUrls) {
+        if ($downloadDone) { break }
+        $tempFile = $null
+        try {
+            $tempFile = [System.IO.Path]::GetTempFileName()
+            Write-Host "Trying download test: $testUrl" -ForegroundColor Yellow
 
-        $outputLines += "Internet Download Test:"
-        $outputLines += "  URL: $testUrl"
-        $outputLines += "  File Size: $sizeMB MB"
-        $outputLines += "  Time: $([math]::Round($duration,2)) sec"
-        $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
-        $durationMs = [math]::Round($stopwatch.Elapsed.TotalMilliseconds)
-    } catch {
-        if ($status -ne "FAILED") { $status = "FAILED" }
-        $outputLines += "Internet Download Test: Failed - $($_.Exception.Message)"
-    } finally {
-        if ($tempFile -and (Test-Path $tempFile)) {
-            Remove-Item $tempFile -ErrorAction SilentlyContinue
+            # Temporarily bypass SSL cert validation - handles VPN/proxy MITM (Mullvad, Tailscale, etc.)
+            $prevCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
+            $iwParams = @{ Uri = $testUrl; OutFile = $tempFile; ErrorAction = "Stop" }
+            if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $iwParams.UseBasicParsing = $true }
+            if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec'))      { $iwParams.TimeoutSec = 60 }
+            Invoke-WebRequest @iwParams | Out-Null
+            $stopwatch.Stop()
+
+            # Restore SSL validation
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCallback
+            $prevCallback = $null
+
+            $fileInfo  = Get-Item $tempFile
+            $sizeBytes = [double]$fileInfo.Length
+            if ($sizeBytes -lt 1000) { throw "Downloaded file too small ($sizeBytes bytes) - likely an error page" }
+
+            $duration  = [math]::Max($stopwatch.Elapsed.TotalSeconds, 0.001)
+            $sizeMB    = [math]::Round($sizeBytes / 1MB, 2)
+            $mbps      = [math]::Round((($sizeBytes * 8) / 1MB) / $duration, 2)
+            $mbPerSec  = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+
+            $outputLines += "Internet Download Test:"
+            $outputLines += "  URL: $testUrl"
+            $outputLines += "  File Size: $sizeMB MB"
+            $outputLines += "  Time: $([math]::Round($duration, 2)) sec"
+            $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
+            $durationMs = [math]::Round($stopwatch.Elapsed.TotalMilliseconds)
+            $downloadDone = $true
+
+        } catch {
+            # Restore SSL validation even on failure
+            if ($prevCallback -ne $null) {
+                try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCallback } catch {}
+                $prevCallback = $null
+            }
+            Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
+            $outputLines += "Tried $testUrl - Failed: $($_.Exception.Message)"
+        } finally {
+            if ($tempFile -and (Test-Path $tempFile)) {
+                Remove-Item $tempFile -ErrorAction SilentlyContinue
+            }
         }
+    }
+
+    if (-not $downloadDone) {
+        if ($status -ne "FAILED") { $status = "FAILED" }
+        $outputLines += "Internet Download Test: All URLs failed - check firewall/proxy settings"
     }
 
     $script:TestResults += @{
@@ -575,17 +610,21 @@ function Test-NetworkSpeed {
 
 function Test-NetworkLatency {
     Write-Host "`n=== Network Latency (Test-NetConnection & PsPing) ===" -ForegroundColor Green
+
     $targetHost = "8.8.8.8"
+    # FIX: Removed $targetPort - it was never defined, causing Test-NetConnection to pass Port=0
+    # which fails validation. ICMP ping does not require a port.
     $lines = @("Target: $targetHost")
     $status = "SUCCESS"
-    
-    # Built-in Test-NetConnection results (ICMP only)
+
+    # FIX: Removed -Port and -InformationLevel Detailed (requires a port >= 1)
+    # Plain Test-NetConnection does ICMP ping which is all we need here.
     try {
-        $tnc = Test-NetConnection -ComputerName $targetHost -InformationLevel Detailed
+        $tnc = Test-NetConnection -ComputerName $targetHost -WarningAction SilentlyContinue -ErrorAction Stop
         if ($tnc) {
             $lines += "Test-NetConnection:"
             $lines += "  Ping Succeeded: $($tnc.PingSucceeded)"
-            if ($tnc.PingReplyDetails) {
+            if ($tnc.PingSucceeded -and $tnc.PingReplyDetails) {
                 $lines += "  Ping RTT: $($tnc.PingReplyDetails.RoundtripTime) ms"
             }
         }
@@ -593,31 +632,38 @@ function Test-NetworkLatency {
         $status = "FAILED"
         $lines += "Test-NetConnection: Failed - $($_.Exception.Message)"
     }
-    
-    # Sysinternals PsPing results (ICMP only)
+
+    # Sysinternals PsPing - ICMP ping only (no port needed)
     try {
         $pspingPath = Join-Path $SysinternalsPath "psping.exe"
         if (Test-Path $pspingPath) {
+            # FIX: Removed "{0}:{1}" port format - use bare IP for ICMP mode
             $pspingArgs = @("-accepteula", "-n", "5", $targetHost)
             Write-Host "Running PsPing latency test..." -ForegroundColor Yellow
             $pspingOutput = & $pspingPath $pspingArgs 2>&1 | Out-String
             $lines += "PsPing Summary:"
+
             $average = $null
             $minimum = $null
             $maximum = $null
-            foreach ($line in $pspingOutput -split "`r?`n") {
-                if ($line -match "Minimum = ([\d\.]+)ms, Maximum = ([\d\.]+)ms, Average = ([\d\.]+)ms") {
+            foreach ($line in ($pspingOutput -split "`r?`n")) {
+                # FIX: Flexible regex - allows variable whitespace and spacing around '='
+                if ($line -match "Minimum\s*=\s*([\d\.]+)\s*ms[,\s]+Maximum\s*=\s*([\d\.]+)\s*ms[,\s]+Average\s*=\s*([\d\.]+)\s*ms") {
                     $minimum = [double]$matches[1]
                     $maximum = [double]$matches[2]
                     $average = [double]$matches[3]
                 }
             }
+
             if ($null -ne $average) {
                 $lines += "  Min: $minimum ms"
                 $lines += "  Max: $maximum ms"
                 $lines += "  Avg: $average ms"
             } else {
                 $lines += "  Unable to parse latency results"
+                # Debug: show raw tail so failures are diagnosable
+                $rawTail = ($pspingOutput -split "`r?`n" | Select-Object -Last 8) -join " | "
+                $lines += "  [Debug] PsPing raw tail: $rawTail"
             }
         } else {
             $lines += "PsPing Summary: psping.exe not found in Sysinternals folder"
@@ -626,7 +672,7 @@ function Test-NetworkLatency {
         $status = "FAILED"
         $lines += "PsPing Summary: Failed - $($_.Exception.Message)"
     }
-    
+
     $script:TestResults += @{
         Tool="Network-Latency"; Description="Connectivity latency tests"
         Status=$status; Output=($lines -join "`n"); Duration=0
@@ -1171,7 +1217,9 @@ function Test-Power {
         } catch { $lines += "No battery (desktop)" }
 
         if ($script:IsAdmin) {
-            $report = Join-Path $ScriptRoot "energy-report.html"
+            $reportsDir = Join-Path $ScriptRoot "Reports"
+            if (!(Test-Path $reportsDir)) { New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null }
+            $report = Join-Path $reportsDir "energy-report.html"
             Write-Host "Generating energy report ($script:ENERGY_DURATION sec)..." -ForegroundColor Yellow
             powercfg /energy /output $report /duration $script:ENERGY_DURATION 2>&1 | Out-Null
             if (Test-Path $report) {
@@ -1286,19 +1334,32 @@ function Test-WindowsUpdate {
 function New-Report {
     Write-Host "`nGenerating reports..." -ForegroundColor Cyan
 
-    # Test write access
-    $testFile = Join-Path $ScriptRoot "writetest_$([guid]::NewGuid().ToString('N')).tmp"
+    # Ensure Reports subfolder exists
+    $ReportsDir = Join-Path $ScriptRoot "Reports"
+    if (!(Test-Path $ReportsDir)) {
+        try {
+            New-Item -ItemType Directory -Path $ReportsDir -Force | Out-Null
+            Write-Host "Created Reports folder: $ReportsDir" -ForegroundColor DarkGray
+        } catch {
+            Write-Host "ERROR: Cannot create Reports folder: $ReportsDir" -ForegroundColor Red
+            Write-Host "       $($_.Exception.Message)" -ForegroundColor Red
+            return
+        }
+    }
+
+    # Test write access to Reports folder
+    $testFile = Join-Path $ReportsDir "writetest_$([guid]::NewGuid().ToString('N')).tmp"
     try {
         "test" | Out-File -FilePath $testFile -ErrorAction Stop
         Remove-Item $testFile -ErrorAction Stop
     } catch {
-        Write-Host "ERROR: Cannot write to $ScriptRoot" -ForegroundColor Red
+        Write-Host "ERROR: Cannot write to Reports folder: $ReportsDir" -ForegroundColor Red
         return
     }
 
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $cleanPath = Join-Path $ScriptRoot "SystemTest_Clean_$timestamp.txt"
-    $detailedPath = Join-Path $ScriptRoot "SystemTest_Detailed_$timestamp.txt"
+    $cleanPath = Join-Path $ReportsDir "SystemTest_Clean_$timestamp.txt"
+    $detailedPath = Join-Path $ReportsDir "SystemTest_Detailed_$timestamp.txt"
 
     # Calculate stats
     $success = ($TestResults | Where-Object {$_.Status -eq "SUCCESS"}).Count
@@ -1399,16 +1460,16 @@ function New-Report {
     if ($ramInfo -and $ramInfo.Output -match "Usage: ([\d\.]+)%") {
         $usage = [float]$matches[1]
         if ($usage -gt 85) {
-            $recommendations += "• CRITICAL: High memory usage ($usage%)"
-            $recommendations += "  → Close unnecessary programs"
-            $recommendations += "  → Check for memory leaks in Task Manager"
-            $recommendations += "  → Consider adding more RAM (current usage indicates shortage)"
+            $recommendations += "* CRITICAL: High memory usage ($usage%)"
+            $recommendations += "  -> Close unnecessary programs"
+            $recommendations += "  -> Check for memory leaks in Task Manager"
+            $recommendations += "  -> Consider adding more RAM (current usage indicates shortage)"
         } elseif ($usage -gt 70) {
-            $recommendations += "• WARNING: Elevated memory usage ($usage%)"
-            $recommendations += "  → Monitor for memory-intensive applications"
-            $recommendations += "  → RAM upgrade recommended if usage stays consistently high"
+            $recommendations += "* WARNING: Elevated memory usage ($usage%)"
+            $recommendations += "  -> Monitor for memory-intensive applications"
+            $recommendations += "  -> RAM upgrade recommended if usage stays consistently high"
         } elseif ($usage -lt 30) {
-            $recommendations += "• GOOD: Low memory usage ($usage%) - plenty of RAM available"
+            $recommendations += "* GOOD: Low memory usage ($usage%) - plenty of RAM available"
         }
     }
 
@@ -1416,10 +1477,10 @@ function New-Report {
     $smartInfo = $TestResults | Where-Object {$_.Tool -eq "Storage-SMART"}
     if ($smartInfo -and $smartInfo.Output -notmatch "not available") {
         if ($smartInfo.Output -match "Warning|Caution|Failed|Degraded") {
-            $recommendations += "• CRITICAL: Drive health issue detected"
-            $recommendations += "  → BACKUP DATA IMMEDIATELY"
-            $recommendations += "  → Run manufacturer's diagnostic tool"
-            $recommendations += "  → Consider drive replacement"
+            $recommendations += "* CRITICAL: Drive health issue detected"
+            $recommendations += "  -> BACKUP DATA IMMEDIATELY"
+            $recommendations += "  -> Run manufacturer's diagnostic tool"
+            $recommendations += "  -> Consider drive replacement"
         }
     }
 
@@ -1430,16 +1491,16 @@ function New-Report {
         
         # HDD typical: 80-160 MB/s, SSD typical: 200-550 MB/s (SATA), NVMe: 1500+ MB/s
         if ($writeSpeed -lt 50 -or $readSpeed -lt 50) {
-            $recommendations += "• WARNING: Very slow disk performance detected"
-            $recommendations += "  → Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
-            $recommendations += "  → Check for background processes (antivirus, Windows Update)"
-            $recommendations += "  → Run disk defragmentation (HDD only, not SSD)"
-            $recommendations += "  → Check disk health with manufacturer tools"
-            $recommendations += "  → Consider SSD upgrade for significant speed improvement"
+            $recommendations += "* WARNING: Very slow disk performance detected"
+            $recommendations += "  -> Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
+            $recommendations += "  -> Check for background processes (antivirus, Windows Update)"
+            $recommendations += "  -> Run disk defragmentation (HDD only, not SSD)"
+            $recommendations += "  -> Check disk health with manufacturer tools"
+            $recommendations += "  -> Consider SSD upgrade for significant speed improvement"
         } elseif ($writeSpeed -lt 100 -or $readSpeed -lt 100) {
-            $recommendations += "• INFO: Moderate disk performance (likely HDD)"
-            $recommendations += "  → Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
-            $recommendations += "  → Consider SSD upgrade for 3-5x speed improvement"
+            $recommendations += "* INFO: Moderate disk performance (likely HDD)"
+            $recommendations += "  -> Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
+            $recommendations += "  -> Consider SSD upgrade for 3-5x speed improvement"
         }
     }
 
@@ -1447,27 +1508,27 @@ function New-Report {
     if ($netSpeed -and $netSpeed.Output -match "Throughput: ([\d\.]+) Mbps") {
         $throughputMbps = [float]$matches[1]
         if ($throughputMbps -lt 25) {
-            $recommendations += "• WARNING: Internet throughput appears slow ($throughputMbps Mbps)"
-            $recommendations += "  → Verify ISP plan and router performance"
-            $recommendations += "  → Re-test when fewer applications are consuming bandwidth"
+            $recommendations += "* WARNING: Internet throughput appears slow ($throughputMbps Mbps)"
+            $recommendations += "  -> Verify ISP plan and router performance"
+            $recommendations += "  -> Re-test when fewer applications are consuming bandwidth"
         }
     }
 
     if ($netLatency -and $netLatency.Output -match "Avg: ([\d\.]+) ms") {
         $avgLatency = [float]$matches[1]
         if ($avgLatency -gt 100) {
-            $recommendations += "• NOTICE: High network latency detected (Avg $avgLatency ms)"
-            $recommendations += "  → Check local network congestion"
-            $recommendations += "  → Contact ISP if latency persists"
+            $recommendations += "* NOTICE: High network latency detected (Avg $avgLatency ms)"
+            $recommendations += "  -> Check local network congestion"
+            $recommendations += "  -> Contact ISP if latency persists"
         }
     }
 
     if ($updateInfo -and $updateInfo.Output -match "Pending: (\d+)") {
         $pendingUpdates = [int]$matches[1]
         if ($pendingUpdates -gt 0) {
-            $recommendations += "• ACTION: $pendingUpdates Windows update(s) pending installation"
-            $recommendations += "  → Install updates via Settings > Windows Update"
-            $recommendations += "  → Reboot system after installation completes"
+            $recommendations += "* ACTION: $pendingUpdates Windows update(s) pending installation"
+            $recommendations += "  -> Install updates via Settings > Windows Update"
+            $recommendations += "  -> Reboot system after installation completes"
         }
     }
 
@@ -1481,15 +1542,15 @@ function New-Report {
                 $freePercent = [int]$matches[2]
                 
                 if ($freePercent -lt 10) {
-                    $recommendations += "• CRITICAL: Drive $driveLetter has less than 10% free space"
-                    $recommendations += "  → Delete unnecessary files immediately"
-                    $recommendations += "  → Use Disk Cleanup (cleanmgr.exe)"
-                    $recommendations += "  → Move files to external storage"
-                    $recommendations += "  → System performance will degrade below 10% free"
+                    $recommendations += "* CRITICAL: Drive $driveLetter has less than 10% free space"
+                    $recommendations += "  -> Delete unnecessary files immediately"
+                    $recommendations += "  -> Use Disk Cleanup (cleanmgr.exe)"
+                    $recommendations += "  -> Move files to external storage"
+                    $recommendations += "  -> System performance will degrade below 10% free"
                 } elseif ($freePercent -lt 20) {
-                    $recommendations += "• WARNING: Drive $driveLetter has less than 20% free space"
-                    $recommendations += "  → Clean up unnecessary files soon"
-                    $recommendations += "  → Use Storage Sense or Disk Cleanup"
+                    $recommendations += "* WARNING: Drive $driveLetter has less than 20% free space"
+                    $recommendations += "  -> Clean up unnecessary files soon"
+                    $recommendations += "  -> Use Storage Sense or Disk Cleanup"
                 }
             }
         }
@@ -1498,25 +1559,34 @@ function New-Report {
     # === SSD TRIM STATUS ===
     $trimInfo = $TestResults | Where-Object {$_.Tool -eq "SSD-TRIM"}
     if ($trimInfo -and $trimInfo.Output -match "Disabled") {
-        $recommendations += "• WARNING: TRIM is disabled for SSD"
-        $recommendations += "  → Enable TRIM: fsutil behavior set DisableDeleteNotify 0"
-        $recommendations += "  → TRIM maintains SSD performance and longevity"
+        $recommendations += "* WARNING: TRIM is disabled for SSD"
+        $recommendations += "  -> Enable TRIM: fsutil behavior set DisableDeleteNotify 0"
+        $recommendations += "  -> TRIM maintains SSD performance and longevity"
     }
 
-    # === NETWORK PERFORMANCE ===
+    # === NETWORK ADAPTERS - skip virtual/VPN interfaces to avoid false positives ===
     $nicInfo = $TestResults | Where-Object {$_.Tool -eq "NIC-Info"}
     if ($nicInfo) {
-        if ($nicInfo.Output -match "10 Mbps|100 Mbps") {
-            $recommendations += "• INFO: Slow network adapter detected (10/100 Mbps)"
-            $recommendations += "  → Upgrade to Gigabit Ethernet (1000 Mbps)"
-            $recommendations += "  → Check cable quality (use Cat5e or Cat6)"
+        $physicalSlowAdapter = $false
+        foreach ($nicLine in ($nicInfo.Output -split "`n")) {
+            # Only flag PHYSICAL adapters at 10/100 Mbps - exclude known virtual/VPN adapters
+            if ($nicLine -match "(10 Mbps|100 Mbps)" -and
+                $nicLine -notmatch "VMware|VMnet|Virtual|vEthernet|Tailscale|Mullvad|WireGuard|Loopback|Hyper-V|VPN|TAP-Windows|OpenVPN") {
+                $physicalSlowAdapter = $true
+                break
+            }
         }
-        
+        if ($physicalSlowAdapter) {
+            $recommendations += "* WARNING: Physical network adapter running at 10/100 Mbps"
+            $recommendations += "  -> Upgrade to Gigabit Ethernet (1000 Mbps)"
+            $recommendations += "  -> Check cable quality (use Cat5e or Cat6)"
+        }
+
         if ($nicInfo.Output -match "No active adapters") {
-            $recommendations += "• CRITICAL: No active network adapters"
-            $recommendations += "  → Check network cable connections"
-            $recommendations += "  → Verify adapter is enabled in Device Manager"
-            $recommendations += "  → Update network drivers"
+            $recommendations += "* CRITICAL: No active network adapters"
+            $recommendations += "  -> Check network cable connections"
+            $recommendations += "  -> Verify adapter is enabled in Device Manager"
+            $recommendations += "  -> Update network drivers"
         }
     }
 
@@ -1526,22 +1596,22 @@ function New-Report {
         if ($updateInfo.Output -match "Pending: (\d+)") {
             $pendingCount = [int]$matches[1]
             if ($pendingCount -gt 20) {
-                $recommendations += "• WARNING: $pendingCount pending Windows Updates"
-                $recommendations += "  → Install updates soon for security and stability"
-                $recommendations += "  → Schedule during non-working hours"
-                $recommendations += "  → Ensure backup before major updates"
+                $recommendations += "* WARNING: $pendingCount pending Windows Updates"
+                $recommendations += "  -> Install updates soon for security and stability"
+                $recommendations += "  -> Schedule during non-working hours"
+                $recommendations += "  -> Ensure backup before major updates"
             } elseif ($pendingCount -gt 5) {
-                $recommendations += "• INFO: $pendingCount pending Windows Updates available"
-                $recommendations += "  → Install updates when convenient"
+                $recommendations += "* INFO: $pendingCount pending Windows Updates available"
+                $recommendations += "  -> Install updates when convenient"
             } elseif ($pendingCount -eq 0) {
-                $recommendations += "• GOOD: Windows is up to date"
+                $recommendations += "* GOOD: Windows is up to date"
             }
         }
         
         if ($updateInfo.Output -match "Service: Stopped") {
-            $recommendations += "• WARNING: Windows Update service is stopped"
-            $recommendations += "  → Start service: net start wuauserv"
-            $recommendations += "  → Set to Automatic in services.msc"
+            $recommendations += "* WARNING: Windows Update service is stopped"
+            $recommendations += "  -> Start service: net start wuauserv"
+            $recommendations += "  -> Set to Automatic in services.msc"
         }
     }
 
@@ -1549,21 +1619,21 @@ function New-Report {
     $osHealth = $TestResults | Where-Object {$_.Tool -eq "OS-Health"}
     if ($osHealth -and $osHealth.Status -eq "SUCCESS") {
         if ($osHealth.Output -match "corrupt|error|repairable") {
-            $recommendations += "• WARNING: System file corruption detected"
-            $recommendations += "  → Run: DISM /Online /Cleanup-Image /RestoreHealth"
-            $recommendations += "  → Then run: sfc /scannow"
-            $recommendations += "  → Reboot and re-test"
+            $recommendations += "* WARNING: System file corruption detected"
+            $recommendations += "  -> Run: DISM /Online /Cleanup-Image /RestoreHealth"
+            $recommendations += "  -> Then run: sfc /scannow"
+            $recommendations += "  -> Reboot and re-test"
         }
     }
 
     # === HARDWARE ERRORS (WHEA) ===
     $wheaInfo = $TestResults | Where-Object {$_.Tool -eq "WHEA"}
     if ($wheaInfo -and $wheaInfo.Output -notmatch "No WHEA errors") {
-        $recommendations += "• WARNING: Hardware errors detected in event log"
-        $recommendations += "  → Review Event Viewer for details"
-        $recommendations += "  → Test RAM with Windows Memory Diagnostic"
-        $recommendations += "  → Update BIOS/UEFI firmware"
-        $recommendations += "  → Check for overheating issues"
+        $recommendations += "* WARNING: Hardware errors detected in event log"
+        $recommendations += "  -> Review Event Viewer for details"
+        $recommendations += "  -> Test RAM with Windows Memory Diagnostic"
+        $recommendations += "  -> Update BIOS/UEFI firmware"
+        $recommendations += "  -> Check for overheating issues"
     }
 
     # === CPU PERFORMANCE ===
@@ -1571,11 +1641,11 @@ function New-Report {
     if ($cpuPerf -and $cpuPerf.Output -match "Ops/sec: (\d+)") {
         $opsPerSec = [int]$matches[1]
         if ($opsPerSec -lt 5000000) {
-            $recommendations += "• INFO: CPU performance lower than expected"
-            $recommendations += "  → Check for background processes consuming CPU"
-            $recommendations += "  → Set power plan to High Performance"
-            $recommendations += "  → Check CPU temperatures (thermal throttling)"
-            $recommendations += "  → Update chipset drivers"
+            $recommendations += "* INFO: CPU performance lower than expected"
+            $recommendations += "  -> Check for background processes consuming CPU"
+            $recommendations += "  -> Set power plan to High Performance"
+            $recommendations += "  -> Check CPU temperatures (thermal throttling)"
+            $recommendations += "  -> Update chipset drivers"
         }
     }
 
@@ -1586,10 +1656,10 @@ function New-Report {
             if ([int]::TryParse($matches[1], [ref]$driverYear)) {
                 $currentYear = (Get-Date).Year
                 if ($currentYear - $driverYear -gt 1) {
-                    $recommendations += "• INFO: GPU drivers are over 1 year old"
-                    $recommendations += "  → Update to latest drivers for best performance"
-                    $recommendations += "  → NVIDIA: GeForce Experience or nvidia.com"
-                    $recommendations += "  → AMD: amd.com/en/support"
+                    $recommendations += "* INFO: GPU drivers are over 1 year old"
+                    $recommendations += "  -> Update to latest drivers for best performance"
+                    $recommendations += "  -> NVIDIA: GeForce Experience or nvidia.com"
+                    $recommendations += "  -> AMD: amd.com/en/support"
                 }
             }
         }
@@ -1599,35 +1669,35 @@ function New-Report {
     $powerInfo = $TestResults | Where-Object {$_.Tool -eq "Power-Energy"}
     if ($powerInfo -and $powerInfo.Output -match "Battery") {
         if ($powerInfo.Output -match "energy-report.html") {
-            $recommendations += "• INFO: Energy report generated"
-            $recommendations += "  → Review energy-report.html for battery health"
+            $recommendations += "* INFO: Energy report generated"
+            $recommendations += "  -> Review energy-report.html for battery health"
         }
     }
 
     # === OVERALL SYSTEM HEALTH ===
     if ($failed -gt 5) {
-        $recommendations += "• CRITICAL: Multiple test failures ($failed failures)"
-        $recommendations += "  → Review detailed report for specific issues"
-        $recommendations += "  → Consider professional diagnostics"
+        $recommendations += "* CRITICAL: Multiple test failures ($failed failures)"
+        $recommendations += "  -> Review detailed report for specific issues"
+        $recommendations += "  -> Consider professional diagnostics"
     }
 
     if ($failed -eq 0 -and $skipped -eq 0) {
-        $recommendations += "• EXCELLENT: All tests passed successfully"
-        $recommendations += "  → System is operating normally"
+        $recommendations += "* EXCELLENT: All tests passed successfully"
+        $recommendations += "  -> System is operating normally"
     } elseif ($skipped -gt 5) {
-        $recommendations += "• INFO: $skipped tests skipped (admin required)"
-        $recommendations += "  → Run as administrator for complete diagnostics"
+        $recommendations += "* INFO: $skipped tests skipped (admin required)"
+        $recommendations += "  -> Run as administrator for complete diagnostics"
     }
 
     # === GENERAL MAINTENANCE ===
     if ($recommendations.Count -lt 3) {
         $recommendations += ""
         $recommendations += "GENERAL MAINTENANCE TIPS:"
-        $recommendations += "• Keep Windows and drivers updated"
-        $recommendations += "• Run disk cleanup monthly (cleanmgr.exe)"
-        $recommendations += "• Monitor temperatures during heavy use"
-        $recommendations += "• Maintain at least 20% free disk space"
-        $recommendations += "• Back up important data regularly"
+        $recommendations += "* Keep Windows and drivers updated"
+        $recommendations += "* Run disk cleanup monthly (cleanmgr.exe)"
+        $recommendations += "* Monitor temperatures during heavy use"
+        $recommendations += "* Maintain at least 20% free disk space"
+        $recommendations += "* Back up important data regularly"
     }
 
     # Add all recommendations to report
@@ -1672,8 +1742,8 @@ function New-Report {
 
     # Save reports
     try {
-        $cleanReport | Out-File -FilePath $cleanPath -Encoding UTF8
-        $detailedReport | Out-File -FilePath $detailedPath -Encoding UTF8
+        $cleanReport | Out-File -FilePath $cleanPath -Encoding ASCII
+        $detailedReport | Out-File -FilePath $detailedPath -Encoding ASCII
 
         $cleanSize = [math]::Round((Get-Item $cleanPath).Length/1KB,1)
         $detailSize = [math]::Round((Get-Item $detailedPath).Length/1KB,1)
@@ -1723,9 +1793,9 @@ function Show-Menu {
     Write-Host "11. Network Adapters"
     Write-Host "12. GPU (Enhanced)" -ForegroundColor Cyan
     <#
-    Write-Host "    └─ 12a. Basic GPU Info"
-    Write-Host "    └─ 12b. Vendor-Specific (NVIDIA/AMD)"
-    Write-Host "    └─ 12c. GPU Memory Test"
+    Write-Host "    +- 12a. Basic GPU Info"
+    Write-Host "    +- 12b. Vendor-Specific (NVIDIA/AMD)"
+    Write-Host "    +- 12c. GPU Memory Test"
     #>
     Write-Host "    - 12a. Basic GPU Info"
     Write-Host "    - 12b. Vendor-Specific (NVIDIA/AMD)"
@@ -1806,11 +1876,10 @@ if ($MyInvocation.InvocationName -ne '.') {
     try {
         Write-Host "Starting Sysinternals Tester v$script:VERSION..." -ForegroundColor Green
 
-        $envReady = Initialize-Environment
-        if (!$envReady) {
-            Write-Host "`nWARNING: Tools missing - limited functionality" -ForegroundColor Yellow
-            Write-Host "Use menu to download Sysinternals tools" -ForegroundColor Yellow
-            Start-Sleep -Seconds 2
+        if (!(Initialize-Environment)) {
+            Write-Host "`nSetup required." -ForegroundColor Red
+            Read-Host "Press Enter to exit"
+            exit 1
         }
 
         if ($AutoRun) {
