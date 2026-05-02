@@ -21,9 +21,9 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
 * Quickly identifying performance bottlenecks.
 ---
  
-## What's New in v2.4
+## What's New in v2.5
  
-v2.4 focuses on fixing real-world network testing failures observed in the field, particularly on systems running VPN software (Mullvad, Tailscale, WireGuard) and environments with virtual adapters (VMware, Hyper-V). It also resolves a latency test crash that affected every system, and fixes report encoding that caused garbled output in Notepad and legacy viewers.
+v2.5 focuses on fixing real-world network testing failures observed in the field, particularly on systems running VPN software (Mullvad, Tailscale, WireGuard) and environments with virtual adapters (VMware, Hyper-V). It also resolves a latency test crash that affected every system, and fixes report encoding that caused garbled output in Notepad and legacy viewers.
  
 ### Bug Fixes
  
@@ -71,25 +71,29 @@ v2.4 focuses on fixing real-world network testing failures observed in the field
 * **One-click Menu or Autorun** — interactive menu or `-AutoRun` parameter
 * **Output Cleaner** — removes banners, EULA text, usage blocks for readable reports
 * **Comprehensive Tests** — CPU, RAM, Disk, GPU, Network, OS Health, Windows Update status
+* **Smart Hardware Detection**: Accurate VRAM reporting for modern GPUs (RTX 30/40/50-series) bypassing WMI 4GB limits.
 * **Enhanced GPU Testing** — Multi-GPU support, NVIDIA/AMD vendor tools, display configuration
 * **Network Speed & Latency** — Multi-URL fallback download test, PsPing integration, VPN-aware
+* **Deep Diagnostics**: Automated DISM/SFC, Storage health, and Network throughput testing.
 * **Tool Integrity Verification** — Digital signature checking for all Sysinternals tools
 * **Smart Reporting** — timestamped Clean Summary + Detailed TXT reports with recommendations
 * **Fully Portable** — runs from USB; no installation required
 * **Graceful Degradation** — missing tools detected and skipped automatically
 * **Robust Elevation Handling** — reliable admin detection (Windows Home compatible)
 * **Auto-Download Tools** — built-in Sysinternals Suite downloader via batch launcher
+* **Resilient Downloads**: Triple-redundant download engine (BITS > IWR > WebClient) for Sysinternals utilities.
 * **Windows Update Integration** — checks pending updates and service status
 * **Modern PowerShell** — uses CIM instances (not deprecated WMI) for better performance
 ---
  
-## Requirements
+## 📋 Requirements
  
-* **OS:** Windows 10/11 (Windows Server supported)
-* **PowerShell:** 5.1+ or PowerShell 7
+* **OS:** Windows 10/11 (Home/Pro/Enterprise & Windows Server supported)
+* **PowerShell:** 5.1+ or PowerShell 7 (Standard Windows PowerShell)
 * **Permissions:** Administrator rights recommended (some tests require elevation)
-* **Internet:** Only needed for auto-download feature (optional)
+* **Internet**: Required for Option 5 (Sysinternals Download)
 * **Sysinternals Tools:** Auto-downloadable via launcher or manual installation
+  * *Note: v2.5 now supports TLS 1.3 for secure communication with Microsoft CDNs.*
 * **GPU Tools (Optional):** NVIDIA drivers (nvidia-smi), AMD drivers, GPU-Z
 ---
  
@@ -173,9 +177,9 @@ For enhanced GPU testing:
 | 14 | Hardware Events | WHEA error logs (last 7 days) | Event Viewer |
 | 15 | Windows Update | Pending updates, service status | Windows Update COM API |
  
-### Network Testing (Option 7) — v2.4 Changes
+### Network Testing (Option 7) — v2.5 Changes
  
-The network test was the most heavily revised area in v2.4. Specific improvements:
+The network test was the most heavily revised area in v2.5. Specific improvements:
  
 * **Speed test** now tries three servers in sequence (Cloudflare, Hetzner HTTP, OVH) and stops at the first success, rather than failing outright if the single Hetzner HTTPS URL is blocked or intercepted
 * **SSL certificate bypass** is applied per-attempt and restored immediately after, handling VPN and proxy setups that perform TLS interception (Mullvad, corporate proxies, etc.)
@@ -189,7 +193,7 @@ The network test was the most heavily revised area in v2.4. Specific improvement
 ### Clean Summary Report
 ```
 =========================================
-  SYSTEM TEST REPORT v2.4
+  SYSTEM TEST REPORT v2.5
   CLEAN SUMMARY
 =========================================
 Date: 04/23/2026 14:30:22
@@ -231,7 +235,7 @@ GPU:
  
 NETWORK SPEED:
   Active Link Speeds:
-    Wi-Fi: 2.4 Gbps
+    Wi-Fi: 2.5 Gbps
     Mullvad: 100 Gbps
     Tailscale: 100 Gbps
   Internet Download Test:
@@ -248,7 +252,7 @@ NETWORK LATENCY:
   PsPing Summary:
     Min: 11.2 ms
     Max: 14.7 ms
-    Avg: 12.4 ms
+    Avg: 12.5 ms
  
 WINDOWS UPDATE:
   Service: Running
@@ -279,9 +283,9 @@ The batch launcher (`SystemTester.bat`) provides:
 2. **Run ALL Tests Automatically** — Complete system scan with auto-report
 3. **Fix PowerShell Execution Policy** — Set CurrentUser to RemoteSigned
 4. **Verify Tool Integrity** — Check digital signatures and file sizes of Sysinternals tools
-5. **Download/Update Sysinternals Suite** — Auto-download from Microsoft (~35 MB); VPN-compatible in v2.4
+5. **Download/Update Sysinternals Suite** — Auto-download from Microsoft (~35 MB); VPN-compatible in v2.5
 6. **GPU Testing Tools Manager** — Download and manage GPU testing tools
-7. **Help / Troubleshooting** — Comprehensive troubleshooting guide updated for v2.4
+7. **Help / Troubleshooting** — Comprehensive troubleshooting guide updated for v2.5
 8. **Exit**
 ---
  
@@ -289,24 +293,24 @@ The batch launcher (`SystemTester.bat`) provides:
  
 ### Network speed test fails / SSL error
 **Cause:** VPN or proxy performing TLS inspection (Mullvad, Tailscale, corporate proxy).
-**Status:** Fixed in v2.4. The script now tries three different servers and bypasses certificate validation per-attempt.
+**Status:** Fixed in v2.5. The script now tries three different servers and bypasses certificate validation per-attempt.
 If all three fail, check firewall rules blocking outbound HTTP/HTTPS.
  
 ### Latency test always fails with "Port" error
 **Cause:** Bug in v2.21 — an undefined `$targetPort` variable caused `Test-NetConnection` to receive `Port=0`, which Windows rejects.
-**Status:** Fixed in v2.4.
+**Status:** Fixed in v2.5.
  
 ### PsPing shows "Unable to parse latency results"
 **Cause:** PsPing output formatting variation not matched by the old strict regex.
-**Status:** Fixed in v2.4. If it still shows, the debug line will display the raw PsPing output for diagnosis.
+**Status:** Fixed in v2.5. If it still shows, the debug line will display the raw PsPing output for diagnosis.
  
 ### VMware or VPN adapters flagged as "slow NIC"
 **Cause:** Old recommendation logic matched `100 Mbps` anywhere in the adapter list, including virtual adapters.
-**Status:** Fixed in v2.4. Virtual and VPN adapters are now excluded from the physical NIC speed check.
+**Status:** Fixed in v2.5. Virtual and VPN adapters are now excluded from the physical NIC speed check.
  
 ### Reports contain garbled characters (â€¢ â†')
 **Cause:** Report was written as UTF-8 but viewed in Notepad or a tool expecting ASCII/Latin-1.
-**Status:** Fixed in v2.4. Reports now use ASCII encoding and plain `*` / `->` characters.
+**Status:** Fixed in v2.5. Reports now use ASCII encoding and plain `*` / `->` characters.
  
 ### "Execution policy" errors
 **Solution:** Use launcher Menu Option 3, or run:
@@ -346,7 +350,7 @@ The `Reports\` folder is created automatically the first time a report is genera
  
 ## Version History
  
-### v2.4 — April 2026
+### v2.5 — April 2026
 - Fixed latency test crash: removed undefined `$targetPort` and broken `Test-NetConnection` args
 - Fixed speed test SSL failure under VPN/proxy TLS interception
 - Added 3-URL fallback chain for speed test (Cloudflare, Hetzner HTTP, OVH)
@@ -361,7 +365,7 @@ The `Reports\` folder is created automatically the first time a report is genera
 - Batch: Added SSL bypass to Sysinternals Suite download
 - Batch: Simplified VERIFY section, removed misleading exit-code branching
 - Batch: Removed stale `SystemTester_FIXED.ps1` legacy filename reference
-- Batch: Updated Help section to document v2.4 changes
+- Batch: Updated Help section to document v2.5 changes
 - Batch: EXIT screen updated to show `Reports\` subfolder path
 ### v2.21 — 2025
 - Added tool integrity verification (digital signature checking)
@@ -503,6 +507,6 @@ MIT License — See [LICENSE](LICENSE) file for details.
 * **PowerShell Community** — For patterns and best practices
 ---
  
-*Tested on Windows 10 (1909+) and Windows 11 — Enterprise, Pro, and Home editions*
+*Tested on Windows 10 (1909+) and Windows 11 — Enterprise, Pro, Home & Server editions*
  
-**Last Updated:** April 2026 | **Version:** 2.4 | **Status:** Production Ready
+**Last Updated:** AMay 2026 | **Version:** 2.5 | **Status:** Production Ready
