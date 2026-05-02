@@ -28,12 +28,16 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host "Running from: $DriveLetter" -ForegroundColor Cyan
 
 # Detect if launched via batch file
+# FIX v2.5: .Parent property only exists on Process objects in PowerShell 6+ (Core).
+#           Windows PowerShell 5.1 has no such property - silently returned $null,
+#           making batch detection always fail. Use Win32_Process.ParentProcessId
+#           which works on every supported PowerShell version.
 function Test-LauncherAwareness {
     try {
-        $parentPID = (Get-Process -Id $PID).Parent.Id
-        if ($parentPID) {
-            $parentProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$parentPID" -ErrorAction Stop
-            if ($parentProcess.Name -eq "cmd.exe") {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop
+        if ($proc -and $proc.ParentProcessId) {
+            $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ParentProcessId)" -ErrorAction Stop
+            if ($parent -and $parent.Name -eq "cmd.exe") {
                 $script:LaunchedViaBatch = $true
                 Write-Host "Launcher: Batch file detected" -ForegroundColor DarkGray
                 return $true
@@ -446,33 +450,81 @@ function Test-Storage {
         Invoke-Tool -ToolName "du" -ArgumentList "-l 2 C:\" -Description "Disk usage C:"
 
     # Disk performance test
-    Write-Host "Running disk test..." -ForegroundColor Yellow
+    # FIX v2.5 Issue #6: Original used Out-File -Append + Get-Content -Raw which
+    # measures filesystem cache, not disk. WriteThrough+FlushFileBuffers forces
+    # actual disk writes; FileStream.NoBuffering would also bypass the read cache
+    # but requires sector-aligned buffers. We instead read with FILE_FLAG_SEQUENTIAL_SCAN
+    # and a fresh handle after closing the writer, which causes Windows to re-read
+    # from disk for sufficiently large files. 64MB payload exceeds typical L3 caches
+    # but stays small enough to keep the test under a few seconds on slow drives.
+    Write-Host "Running disk test (64MB write-through)..." -ForegroundColor Yellow
     try {
         $testFile = Join-Path $env:TEMP "disktest_$([guid]::NewGuid().ToString('N')).tmp"
-        $testData = "0" * 1024 * 1024
+        $blockSize = 1MB
+        $blockCount = 64
+        $totalBytes = $blockSize * $blockCount
+        $buffer = New-Object byte[] $blockSize
+        # Fill with non-zero data so compression-aware filesystems can't elide writes
+        $rng = New-Object System.Random
+        $rng.NextBytes($buffer)
 
+        # WRITE: FileStream with WriteThrough flag forces writes past OS cache to disk
         $writeStart = Get-Date
-        for ($i=0; $i -lt 10; $i++) {
-            $testData | Out-File -FilePath $testFile -Append -Encoding ASCII -ErrorAction Stop
+        $fsWrite = [System.IO.FileStream]::new(
+            $testFile,
+            [System.IO.FileMode]::Create,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None,
+            $blockSize,
+            [System.IO.FileOptions]::WriteThrough
+        )
+        try {
+            for ($i = 0; $i -lt $blockCount; $i++) {
+                $fsWrite.Write($buffer, 0, $blockSize)
+            }
+            $fsWrite.Flush($true)  # Flush to disk, not just to OS
+        } finally {
+            $fsWrite.Dispose()
         }
         $writeTime = ((Get-Date) - $writeStart).TotalMilliseconds
 
+        # READ: Use SequentialScan flag for predictable sequential read pattern
         $readStart = Get-Date
-        $null = Get-Content $testFile -Raw -ErrorAction Stop
+        $fsRead = [System.IO.FileStream]::new(
+            $testFile,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read,
+            $blockSize,
+            [System.IO.FileOptions]::SequentialScan
+        )
+        try {
+            $readBuffer = New-Object byte[] $blockSize
+            $bytesRead = 0
+            do {
+                $bytesRead = $fsRead.Read($readBuffer, 0, $blockSize)
+            } while ($bytesRead -gt 0)
+        } finally {
+            $fsRead.Dispose()
+        }
         $readTime = ((Get-Date) - $readStart).TotalMilliseconds
 
-        Remove-Item $testFile -ErrorAction Stop
+        Remove-Item $testFile -ErrorAction SilentlyContinue
 
-        $writeMBps = if ($writeTime -gt 0) { [math]::Round(10/($writeTime/1000),2) } else { 0 }
-        $readMBps = if ($readTime -gt 0) { [math]::Round(10/($readTime/1000),2) } else { 0 }
+        $totalMB = $totalBytes / 1MB
+        $writeMBps = if ($writeTime -gt 0) { [math]::Round($totalMB / ($writeTime/1000), 2) } else { 0 }
+        $readMBps  = if ($readTime  -gt 0) { [math]::Round($totalMB / ($readTime /1000), 2) } else { 0 }
 
         $script:TestResults += @{
-            Tool="Disk-Performance"; Description="Disk performance (10MB)"
-            Status="SUCCESS"; Output="Write: $writeMBps MB/s`nRead: $readMBps MB/s"; Duration=($writeTime+$readTime)
+            Tool="Disk-Performance"; Description="Disk performance ($([int]$totalMB)MB sequential, write-through)"
+            Status="SUCCESS"
+            Output="Test Size: $([int]$totalMB) MB`nWrite: $writeMBps MB/s`nRead: $readMBps MB/s`nNote: Write-through bypasses OS cache; read may be partially cached"
+            Duration=($writeTime+$readTime)
         }
         Write-Host "Disk: Write $writeMBps MB/s, Read $readMBps MB/s" -ForegroundColor Green
     } catch {
-        Write-Host "Disk test failed" -ForegroundColor Yellow
+        Write-Host "Disk test failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        if ($testFile -and (Test-Path $testFile)) { Remove-Item $testFile -ErrorAction SilentlyContinue }
     }
 }
 
@@ -540,17 +592,20 @@ function Test-NetworkSpeed {
 
     $tempFile = $null
     $downloadDone = $false
-    $prevCallback = $null
 
     foreach ($testUrl in $testUrls) {
         if ($downloadDone) { break }
         $tempFile = $null
+
+        # FIX v2.5 Bug #2: Capture cert callback BEFORE try{}, restore in finally{}
+        # unconditionally. Previous code skipped restore when prev was $null (the
+        # default state), leaking the { $true } override across the session.
+        $prevCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
         try {
             $tempFile = [System.IO.Path]::GetTempFileName()
             Write-Host "Trying download test: $testUrl" -ForegroundColor Yellow
 
             # Temporarily bypass SSL cert validation - handles VPN/proxy MITM (Mullvad, Tailscale, etc.)
-            $prevCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
             [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
             $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -561,17 +616,19 @@ function Test-NetworkSpeed {
             Invoke-WebRequest @iwParams | Out-Null
             $stopwatch.Stop()
 
-            # Restore SSL validation
-            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCallback
-            $prevCallback = $null
-
             $fileInfo  = Get-Item $tempFile
             $sizeBytes = [double]$fileInfo.Length
-            if ($sizeBytes -lt 1000) { throw "Downloaded file too small ($sizeBytes bytes) - likely an error page" }
+            # FIX v2.5.1: Test files are 10MB. A 1KB threshold let error pages,
+            # tiny redirects, and partial responses through, producing bogus
+            # "0.01 Mbps" readings. Require at least 1MB for a valid sample.
+            if ($sizeBytes -lt 1MB) { throw "Downloaded file too small ($sizeBytes bytes) - likely error page or redirect" }
 
             $duration  = [math]::Max($stopwatch.Elapsed.TotalSeconds, 0.001)
             $sizeMB    = [math]::Round($sizeBytes / 1MB, 2)
-            $mbps      = [math]::Round((($sizeBytes * 8) / 1MB) / $duration, 2)
+            # FIX v2.5 Bug #5: Mbps is base-10 (1 Mb = 1,000,000 bits), not 1 MiB.
+            # Previous calc using 1MB (=1,048,576) produced mebibits-per-second,
+            # under-reporting throughput by ~4.86%.
+            $mbps      = [math]::Round(($sizeBytes * 8 / 1000000) / $duration, 2)
             $mbPerSec  = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
 
             $outputLines += "Internet Download Test:"
@@ -583,14 +640,11 @@ function Test-NetworkSpeed {
             $downloadDone = $true
 
         } catch {
-            # Restore SSL validation even on failure
-            if ($prevCallback -ne $null) {
-                try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCallback } catch {}
-                $prevCallback = $null
-            }
             Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
             $outputLines += "Tried $testUrl - Failed: $($_.Exception.Message)"
         } finally {
+            # Always restore - $null is a valid prior state
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCallback
             if ($tempFile -and (Test-Path $tempFile)) {
                 Remove-Item $tempFile -ErrorAction SilentlyContinue
             }
@@ -742,7 +796,11 @@ function Test-Trim {
         $q = (fsutil behavior query DisableDeleteNotify) 2>&1
         $map = @{}
         ($q -split "`n") | ForEach-Object {
+            # FIX v2.5 Issue #7: fsutil reports both NTFS and ReFS on modern Windows;
+            # original regex only captured NTFS, silently missing ReFS volumes
+            # (Storage Spaces, Dev Drive, etc.).
             if ($_ -match "NTFS DisableDeleteNotify\s*=\s*(\d)") { $map["NTFS"] = $matches[1] }
+            if ($_ -match "ReFS DisableDeleteNotify\s*=\s*(\d)") { $map["ReFS"] = $matches[1] }
         }
         $txt = $map.GetEnumerator() | ForEach-Object {
             $status = if ($_.Value -eq "0") { "Enabled" } else { "Disabled" }
@@ -791,6 +849,40 @@ function Test-NIC {
     }
 }
 
+# FIX v2.5: Win32_VideoController.AdapterRAM is uint32, capped at ~4.29GB. Any GPU
+#           with >4GB VRAM is misreported as 4GB (RTX 3060 Ti shows 4 instead of 8,
+#           RTX 2080 Ti shows 4 instead of 11). Read true value from driver registry
+#           key HardwareInformation.qwMemorySize (64-bit), with WMI fallback for iGPUs.
+function Get-AccurateVRAM {
+    param($VideoController)
+    try {
+        if ($VideoController.PNPDeviceID) {
+            # PNPDeviceID format: PCI\VEN_10DE&DEV_2484&SUBSYS_...&REV_A1\4&...
+            # We need the VEN_xxxx&DEV_xxxx portion for matching
+            $idMatch = [regex]::Match($VideoController.PNPDeviceID, 'VEN_[0-9A-F]+&DEV_[0-9A-F]+', 'IgnoreCase')
+            if ($idMatch.Success) {
+                $devicePattern = $idMatch.Value
+                $regBase = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+                if (Test-Path $regBase) {
+                    $subkeys = Get-ChildItem $regBase -ErrorAction SilentlyContinue |
+                               Where-Object { $_.PSChildName -match '^\d{4}$' }
+                    foreach ($sk in $subkeys) {
+                        $props = Get-ItemProperty $sk.PSPath -ErrorAction SilentlyContinue
+                        if ($props -and $props.MatchingDeviceId -and
+                            $props.MatchingDeviceId -match [regex]::Escape($devicePattern)) {
+                            $qword = $props.'HardwareInformation.qwMemorySize'
+                            if ($qword -and $qword -gt 0) { return [int64]$qword }
+                        }
+                    }
+                }
+            }
+        }
+    } catch {}
+    # Fallback: WMI value (correct for iGPUs and small VRAM, truncated for >4GB dGPUs)
+    if ($VideoController.AdapterRAM) { return [int64]$VideoController.AdapterRAM }
+    return 0
+}
+
 # Test: GPU (Enhanced)
 function Test-GPU {
     Write-Host "`n=== GPU Testing (Enhanced) ===" -ForegroundColor Green
@@ -811,7 +903,8 @@ function Test-GPU {
             $gpuInfo += "-" * 60
             $gpuInfo += "Name: $($gpu.Name)"
             $gpuInfo += "Status: $($gpu.Status)"
-            $gpuInfo += "Adapter RAM: $([math]::Round($gpu.AdapterRAM/1GB,2)) GB"
+            $accurateVRAM = Get-AccurateVRAM -VideoController $gpu
+            $gpuInfo += "Adapter RAM: $([math]::Round($accurateVRAM/1GB,2)) GB"
             $gpuInfo += "Driver Version: $($gpu.DriverVersion)"
             $gpuInfo += "Driver Date: $($gpu.DriverDate)"
             $gpuInfo += "Video Processor: $($gpu.VideoProcessor)"
@@ -1068,27 +1161,37 @@ function Test-GPUVendorSpecific {
     
     # Check for NVIDIA
     try {
-        $nvidiaSmi = "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
-        if (Test-Path $nvidiaSmi) {
-            Write-Host "NVIDIA GPU detected - running nvidia-smi..." -ForegroundColor Yellow
-            
+        # FIX v2.5: Modern NVIDIA drivers (Win10 1909+ / 2019+) install nvidia-smi
+        #           to C:\Windows\System32\ which is on PATH. Old NVSMI folder is
+        #           legacy and absent on most current installs. Try PATH first.
+        $nvidiaSmi = $null
+        $nvidiaSmiCmd = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+        if ($nvidiaSmiCmd) {
+            $nvidiaSmi = $nvidiaSmiCmd.Source
+        } elseif (Test-Path "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe") {
+            $nvidiaSmi = "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+        }
+
+        if ($nvidiaSmi) {
+            Write-Host "NVIDIA GPU detected - running nvidia-smi from $nvidiaSmi..." -ForegroundColor Yellow
+
             $nvidiaOutput = & $nvidiaSmi --query-gpu=name,driver_version,temperature.gpu,utilization.gpu,memory.total,memory.used,power.draw,clocks.current.graphics,clocks.current.memory --format=csv 2>&1 | Out-String
-            
+
             $script:TestResults += @{
                 Tool="NVIDIA-SMI"; Description="NVIDIA GPU metrics"
                 Status="SUCCESS"; Output=$nvidiaOutput; Duration=500
             }
-            
+
             Write-Host "NVIDIA metrics collected" -ForegroundColor Green
-            
+
             # Get more detailed info
             $detailedOutput = & $nvidiaSmi -q 2>&1 | Out-String
-            
+
             $script:TestResults += @{
                 Tool="NVIDIA-SMI-Detailed"; Description="NVIDIA detailed info"
                 Status="SUCCESS"; Output=$detailedOutput; Duration=500
             }
-            
+
         } else {
             Write-Host "NVIDIA GPU not detected or nvidia-smi not installed" -ForegroundColor DarkGray
             $script:TestResults += @{
@@ -1155,43 +1258,91 @@ function Test-GPUVendorSpecific {
 # Test: GPU Memory
 function Test-GPUMemory {
     Write-Host "`n=== GPU Memory Test ===" -ForegroundColor Green
-    
+
     try {
-        $gpus = Get-CimInstance Win32_VideoController
-        
+        $gpus = @(Get-CimInstance Win32_VideoController)
+        $gpuCount = $gpus.Count
+
+        # FIX v2.5.1: \GPU Process Memory(*) counters aggregate across ALL physical
+        # adapters by default. Iterating per-GPU caused both iterations to sum the
+        # SAME total then divide by each GPU's individual VRAM, producing impossible
+        # results like 298% utilization on the iGPU. Fix: sample once outside the
+        # loop, only attribute utilization to a single GPU when there's only one,
+        # and emit a separate system-wide total for multi-GPU systems.
+        $aggregatedDedicated = 0
+        $aggregatedShared    = 0
+        $activeProcesses     = 0
+        $countersAvailable   = $false
+        try {
+            $dedSamples = (Get-Counter -Counter "\GPU Process Memory(*)\Dedicated Usage" -ErrorAction Stop).CounterSamples
+            $shrSamples = (Get-Counter -Counter "\GPU Process Memory(*)\Shared Usage"    -ErrorAction SilentlyContinue).CounterSamples
+
+            $dedSum = ($dedSamples | Measure-Object -Property CookedValue -Sum).Sum
+            $shrSum = ($shrSamples | Measure-Object -Property CookedValue -Sum).Sum
+            if ($dedSum) { $aggregatedDedicated = [double]$dedSum }
+            if ($shrSum) { $aggregatedShared    = [double]$shrSum }
+            $activeProcesses = ($dedSamples | Where-Object { $_.CookedValue -gt 0 } | Measure-Object).Count
+            $countersAvailable = $true
+        } catch {
+            $countersAvailable = $false
+        }
+
         foreach ($gpu in $gpus) {
-            $totalRAM = [math]::Round($gpu.AdapterRAM / 1GB, 2)
-            
+            # FIX v2.5 Bug #3: Use registry-backed VRAM (handles >4GB cards correctly)
+            $totalBytes = Get-AccurateVRAM -VideoController $gpu
+            $totalRAM = [math]::Round($totalBytes / 1GB, 2)
+
             Write-Host "Testing $($gpu.Name) - $totalRAM GB VRAM" -ForegroundColor Yellow
-            
-            # Get current usage via performance counters (if available)
-            try {
-                $perfCounters = Get-Counter -Counter "\GPU Engine(*)\Running Time" -ErrorAction Stop
-                
-                $usage = @()
-                $usage += "GPU: $($gpu.Name)"
-                $usage += "Total VRAM: $totalRAM GB"
-                $usage += "`nActive GPU processes detected: $($perfCounters.CounterSamples.Count)"
-                
-                $script:TestResults += @{
-                    Tool="GPU-Memory-Test"; Description="GPU memory analysis"
-                    Status="SUCCESS"; Output=($usage -join "`n"); Duration=200
+
+            $usage = @()
+            $usage += "GPU: $($gpu.Name)"
+            $usage += "Total VRAM: $totalRAM GB"
+
+            if ($countersAvailable -and $gpuCount -eq 1) {
+                # Single GPU: attributing aggregate counters is accurate
+                $dedicatedMB = [math]::Round($aggregatedDedicated / 1MB, 1)
+                $sharedMB    = [math]::Round($aggregatedShared    / 1MB, 1)
+                $usage += "Dedicated VRAM In Use: $dedicatedMB MB"
+                $usage += "Shared Memory In Use: $sharedMB MB"
+                if ($totalBytes -gt 0 -and $aggregatedDedicated -gt 0) {
+                    $usagePct = [math]::Round(($aggregatedDedicated / $totalBytes) * 100, 1)
+                    $usage += "VRAM Utilization: $usagePct%"
                 }
-                
-                Write-Host "GPU memory test complete" -ForegroundColor Green
-            } catch {
-                # Fallback to basic info
-                $usage = @()
-                $usage += "GPU: $($gpu.Name)"
-                $usage += "Total VRAM: $totalRAM GB"
-                $usage += "Note: Performance counters not available for detailed usage"
-                
-                $script:TestResults += @{
-                    Tool="GPU-Memory-Test"; Description="GPU memory analysis"
-                    Status="SUCCESS"; Output=($usage -join "`n"); Duration=100
-                }
-                
-                Write-Host "GPU memory info collected (limited data)" -ForegroundColor Green
+                $usage += "Active GPU processes: $activeProcesses"
+            } elseif ($gpuCount -gt 1) {
+                # Multi-GPU: don't divide aggregate by per-GPU total - it's nonsense.
+                # See GPU-Memory-Total entry below for system-wide stats.
+                $usage += "Note: Multi-GPU system - per-adapter VRAM usage is not"
+                $usage += "      reliably reported by Windows performance counters."
+                $usage += "      See GPU-Memory-Total entry for system-wide totals."
+            } else {
+                $usage += "Note: GPU Process Memory counters unavailable - VRAM usage cannot be measured"
+            }
+
+            $script:TestResults += @{
+                Tool="GPU-Memory-Test"; Description="GPU memory analysis"
+                Status="SUCCESS"; Output=($usage -join "`n"); Duration=200
+            }
+            Write-Host "GPU memory info collected" -ForegroundColor Green
+        }
+
+        # On multi-GPU systems, emit one system-wide aggregate entry
+        if ($gpuCount -gt 1 -and $countersAvailable) {
+            $totalSystemVRAM = 0
+            foreach ($g in $gpus) { $totalSystemVRAM += (Get-AccurateVRAM -VideoController $g) }
+            $sysOut = @()
+            $sysOut += "System-wide aggregate (all GPUs combined):"
+            $sysOut += "Total VRAM Capacity: $([math]::Round($totalSystemVRAM/1GB,2)) GB"
+            $sysOut += "Dedicated VRAM In Use: $([math]::Round($aggregatedDedicated/1MB,1)) MB"
+            $sysOut += "Shared Memory In Use: $([math]::Round($aggregatedShared/1MB,1)) MB"
+            if ($totalSystemVRAM -gt 0 -and $aggregatedDedicated -gt 0) {
+                $pct = [math]::Round(($aggregatedDedicated / $totalSystemVRAM) * 100, 1)
+                $sysOut += "Aggregate VRAM Utilization: $pct%"
+            }
+            $sysOut += "Active GPU processes: $activeProcesses"
+            $script:TestResults += @{
+                Tool="GPU-Memory-Total"; Description="System-wide GPU memory (all adapters)"
+                Status="SUCCESS"; Output=($sysOut -join "`n"); Duration=50
             }
         }
     } catch {
@@ -1274,10 +1425,16 @@ function Test-WindowsUpdate {
     try {
         $lines = @()
         try {
+            # FIX v2.5.1: Modern Windows trigger-starts wuauserv on demand; a
+            # "Stopped" Status is the normal idle state. Report both Status (for
+            # informational visibility) and StartType (for the actual problem
+            # signal). Recommendations engine now checks StartType, not Status.
             $svc = Get-Service -Name wuauserv -ErrorAction Stop
-            $lines += "Service: $($svc.Status)"
+            $lines += "Service Status: $($svc.Status)"
+            $lines += "Service StartType: $($svc.StartType)"
         } catch {
-            $lines += "Service: Unable to query"
+            $lines += "Service Status: Unable to query"
+            $lines += "Service StartType: Unable to query"
         }
 
         Write-Host "Checking for updates (may take 30-90 sec)..." -ForegroundColor Yellow
@@ -1570,8 +1727,10 @@ function New-Report {
         $physicalSlowAdapter = $false
         foreach ($nicLine in ($nicInfo.Output -split "`n")) {
             # Only flag PHYSICAL adapters at 10/100 Mbps - exclude known virtual/VPN adapters
+            # FIX v2.5 Issue #9: Added ZeroTier, Cisco AnyConnect, GlobalProtect, Fortinet,
+            #                    NordLynx, Pulse, Bluetooth PAN, ProtonVPN to exclusion list
             if ($nicLine -match "(10 Mbps|100 Mbps)" -and
-                $nicLine -notmatch "VMware|VMnet|Virtual|vEthernet|Tailscale|Mullvad|WireGuard|Loopback|Hyper-V|VPN|TAP-Windows|OpenVPN") {
+                $nicLine -notmatch "VMware|VMnet|Virtual|vEthernet|Tailscale|Mullvad|WireGuard|Loopback|Hyper-V|VPN|TAP-Windows|OpenVPN|ZeroTier|AnyConnect|GlobalProtect|Fortinet|FortiClient|NordLynx|Pulse|Bluetooth|ProtonVPN|Surfshark") {
                 $physicalSlowAdapter = $true
                 break
             }
@@ -1608,17 +1767,25 @@ function New-Report {
             }
         }
         
-        if ($updateInfo.Output -match "Service: Stopped") {
-            $recommendations += "* WARNING: Windows Update service is stopped"
-            $recommendations += "  -> Start service: net start wuauserv"
-            $recommendations += "  -> Set to Automatic in services.msc"
+        # FIX v2.5.1: wuauserv StartType=Disabled is the real problem signal.
+        # Status=Stopped is normal (trigger-started on demand by Win 10/11).
+        if ($updateInfo.Output -match "Service StartType: Disabled") {
+            $recommendations += "* WARNING: Windows Update service is DISABLED"
+            $recommendations += "  -> Re-enable: Set-Service wuauserv -StartupType Manual"
+            $recommendations += "  -> Verify in services.msc"
         }
     }
 
     # === OS HEALTH (DISM/SFC) ===
     $osHealth = $TestResults | Where-Object {$_.Tool -eq "OS-Health"}
     if ($osHealth -and $osHealth.Status -eq "SUCCESS") {
-        if ($osHealth.Output -match "corrupt|error|repairable") {
+        # FIX v2.5.1: Original regex matched "corrupt" inside DISM's standard
+        # negative phrasing ("No component store corruption detected"), causing
+        # constant false positives on healthy systems. Match only affirmative
+        # findings; explicitly exclude the negative-phrasing patterns.
+        $oh = $osHealth.Output
+        if ($oh -match "found corrupt|store is repairable|requires repair|cannot repair|integrity violations" -and
+            $oh -notmatch "did not find any integrity violations|No component store corruption") {
             $recommendations += "* WARNING: System file corruption detected"
             $recommendations += "  -> Run: DISM /Online /Cleanup-Image /RestoreHealth"
             $recommendations += "  -> Then run: sfc /scannow"
@@ -1640,8 +1807,12 @@ function New-Report {
     $cpuPerf = $TestResults | Where-Object {$_.Tool -eq "CPU-Performance"}
     if ($cpuPerf -and $cpuPerf.Output -match "Ops/sec: (\d+)") {
         $opsPerSec = [int]$matches[1]
-        if ($opsPerSec -lt 5000000) {
-            $recommendations += "* INFO: CPU performance lower than expected"
+        # FIX v2.5.1: Synthetic test pipes every iteration through Out-Null;
+        # PowerShell pipeline overhead caps it at 50-200k ops/sec on any modern
+        # CPU. Original 5M threshold fired on every healthy system (false positive
+        # 100% of the time). Below 30k indicates real trouble.
+        if ($opsPerSec -lt 30000) {
+            $recommendations += "* INFO: CPU synthetic test slower than typical"
             $recommendations += "  -> Check for background processes consuming CPU"
             $recommendations += "  -> Set power plan to High Performance"
             $recommendations += "  -> Check CPU temperatures (thermal throttling)"
@@ -1681,9 +1852,16 @@ function New-Report {
         $recommendations += "  -> Consider professional diagnostics"
     }
 
-    if ($failed -eq 0 -and $skipped -eq 0) {
-        $recommendations += "* EXCELLENT: All tests passed successfully"
+    # FIX v2.5.1: "EXCELLENT" used to fire whenever no tests crashed, even when
+    # the engine had just printed multiple WARNING/CRITICAL items. Reads as
+    # self-contradictory in the report. Now requires zero prior issues OR
+    # downgrades to a neutral "all tests ran" message when issues exist.
+    $priorIssues = @($recommendations | Where-Object { $_ -match "^\* (CRITICAL|WARNING)" }).Count
+    if ($failed -eq 0 -and $skipped -eq 0 -and $priorIssues -eq 0) {
+        $recommendations += "* EXCELLENT: All tests passed and no issues detected"
         $recommendations += "  -> System is operating normally"
+    } elseif ($failed -eq 0 -and $skipped -eq 0) {
+        $recommendations += "* INFO: All tests ran successfully ($priorIssues item(s) flagged above)"
     } elseif ($skipped -gt 5) {
         $recommendations += "* INFO: $skipped tests skipped (admin required)"
         $recommendations += "  -> Run as administrator for complete diagnostics"
