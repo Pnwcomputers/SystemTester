@@ -4,13 +4,13 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Production Ready Version - v2.4
+:: Production Ready Version - v2.5
 :: =====================================================
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
-set "DOWNLOAD_TIMEOUT_SEC=120"
-set "SCRIPT_VERSION=2.4"
+set "DOWNLOAD_TIMEOUT_SEC=180"
+set "SCRIPT_VERSION=2.5"
 if not defined ST_DEBUG set "ST_DEBUG=0"
 set "LAUNCH_LOG=%TEMP%\SystemTester_launcher.log"
 
@@ -264,7 +264,7 @@ set "SYSINT_DIR=%SCRIPT_DIR%\Sysinternals"
 set "ZIP_FILE=%SCRIPT_DIR%\SysinternalsSuite.zip"
 set "DOWNLOAD_URL=https://download.sysinternals.com/files/SysinternalsSuite.zip"
 
-echo This will download ~35MB from Microsoft.
+echo This will download ~170MB from Microsoft.
 echo Target: %SYSINT_DIR%
 echo.
 set /p "confirm=Proceed? (Y/N): "
@@ -272,28 +272,84 @@ if /i not "%confirm%"=="Y" goto MENU
 
 echo.
 echo Downloading...
-:: FIX v2.4: Added SSL bypass callback to handle VPN/proxy environments (e.g. Mullvad, Tailscale)
-::           that perform TLS interception, which previously caused download failures.
+:: ============================================================================
+:: FIX v2.5: Root cause of v2.4 breakage (reported 2026-04-28):
+::   The line "[Net.ServicePointManager]::SecurityProtocol = [Net...]::Tls12"
+::   ASSIGNED (=) the protocol enum, which silently DROPPED TLS 1.3 from the
+::   set of negotiated protocols. Microsoft's continued TLS 1.2 deprecation
+::   work through Q1 2026 (Azure Storage TLS 1.2-min Feb 2026, ongoing CDN
+::   hardening) plus the Akamai endpoint behind download.sysinternals.com
+::   appears to have started preferring/requiring TLS 1.3 handshakes,
+::   producing "underlying connection was closed" errors that get reported
+::   to the user as a generic "check your internet" message.
+::
+:: Changes:
+::   1. Use -bor (bitwise OR) to ADD TLS 1.2/1.3 to whatever's already
+::      enabled instead of replacing the whole protocol mask.
+::   2. Try BITS first (Start-BitsTransfer) - HTTP/2 capable, resumable,
+::      uses the BITS service which handles modern protocols cleanly.
+::   3. Fall back to Invoke-WebRequest (matches v2.4 behavior).
+::   4. Final fallback: System.Net.WebClient with cert validation bypass
+::      for VPN/proxy TLS-inspection environments (Mullvad, Tailscale).
+::   5. Save and restore both SecurityProtocol and the cert callback so
+::      the script doesn't leave the PowerShell session in a weakened state.
+::   6. Each method reports specifically which one failed and which one
+::      worked, so future debugging is not a guessing game.
+:: ============================================================================
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$ProgressPreference='SilentlyContinue';" ^
+    "$url='%DOWNLOAD_URL%';" ^
+    "$out='%ZIP_FILE%';" ^
+    "$timeout=%DOWNLOAD_TIMEOUT_SEC%;" ^
+    "$origCallback=[Net.ServicePointManager]::ServerCertificateValidationCallback;" ^
+    "$origProtocol=[Net.ServicePointManager]::SecurityProtocol;" ^
     "try {" ^
-    "  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;" ^
-    "  [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true };" ^
-    "  $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue;" ^
-    "  $p = @{ Uri = '%DOWNLOAD_URL%'; OutFile = '%ZIP_FILE%' };" ^
-    "  if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $p.UseBasicParsing = $true };" ^
-    "  if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec')) { $p.TimeoutSec = %DOWNLOAD_TIMEOUT_SEC% };" ^
-    "  Invoke-WebRequest @p;" ^
-    "  [Net.ServicePointManager]::ServerCertificateValidationCallback = $null;" ^
-    "  Write-Host 'Download complete' -ForegroundColor Green" ^
-    "} catch {" ^
-    "  [Net.ServicePointManager]::ServerCertificateValidationCallback = $null;" ^
-    "  Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red; exit 1" ^
+    "  $proto=[Net.ServicePointManager]::SecurityProtocol;" ^
+    "  try { $proto = $proto -bor [Net.SecurityProtocolType]::Tls12 } catch {};" ^
+    "  try { $proto = $proto -bor [Net.SecurityProtocolType]::Tls13 } catch {};" ^
+    "  [Net.ServicePointManager]::SecurityProtocol = $proto;" ^
+    "  $ok=$false; $lastErr='(none)';" ^
+    "  if (-not $ok) {" ^
+    "    try {" ^
+    "      Import-Module BitsTransfer -ErrorAction Stop;" ^
+    "      Start-BitsTransfer -Source $url -Destination $out -ErrorAction Stop;" ^
+    "      if (Test-Path $out) { $ok=$true; Write-Host '  [Method: BITS]' -ForegroundColor DarkGray }" ^
+    "    } catch { $lastErr=$_.Exception.Message; Write-Host ('  BITS failed: ' + $lastErr) -ForegroundColor DarkYellow }" ^
+    "  }" ^
+    "  if (-not $ok) {" ^
+    "    try {" ^
+    "      $p=@{ Uri=$url; OutFile=$out; UseBasicParsing=$true; TimeoutSec=$timeout };" ^
+    "      Invoke-WebRequest @p -ErrorAction Stop;" ^
+    "      if (Test-Path $out) { $ok=$true; Write-Host '  [Method: Invoke-WebRequest]' -ForegroundColor DarkGray }" ^
+    "    } catch { $lastErr=$_.Exception.Message; Write-Host ('  Invoke-WebRequest failed: ' + $lastErr) -ForegroundColor DarkYellow }" ^
+    "  }" ^
+    "  if (-not $ok) {" ^
+    "    try {" ^
+    "      [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true };" ^
+    "      $wc=New-Object System.Net.WebClient;" ^
+    "      $wc.Headers.Add('User-Agent','Mozilla/5.0 SystemTester/2.5');" ^
+    "      $wc.DownloadFile($url,$out);" ^
+    "      $wc.Dispose();" ^
+    "      if (Test-Path $out) { $ok=$true; Write-Host '  [Method: WebClient + cert bypass]' -ForegroundColor DarkGray }" ^
+    "    } catch { $lastErr=$_.Exception.Message; Write-Host ('  WebClient failed: ' + $lastErr) -ForegroundColor DarkYellow }" ^
+    "  }" ^
+    "  if ($ok) {" ^
+    "    Write-Host 'Download complete' -ForegroundColor Green" ^
+    "  } else {" ^
+    "    Write-Host ('ERROR: All download methods failed. Last error: ' + $lastErr) -ForegroundColor Red;" ^
+    "    exit 1" ^
+    "  }" ^
+    "} finally {" ^
+    "  [Net.ServicePointManager]::ServerCertificateValidationCallback = $origCallback;" ^
+    "  [Net.ServicePointManager]::SecurityProtocol = $origProtocol;" ^
     "}"
 
 if errorlevel 1 (
     echo.
-    echo Download failed. Check internet connection.
+    echo Download failed via all methods ^(BITS, Invoke-WebRequest, WebClient^).
+    echo If you are on a VPN with TLS inspection, try disconnecting it and retrying.
+    echo Manual fallback: %DOWNLOAD_URL%
+    echo                  Extract to: %SYSINT_DIR%
     if exist "%ZIP_FILE%" del "%ZIP_FILE%" 2>nul
     pause
     goto MENU
@@ -644,7 +700,15 @@ echo ========================================================
 echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo NEW IN v2.4:
+echo NEW IN v2.5:
+echo   - Fixed Sysinternals download failure (post 2026-04-28)
+echo   - Root cause: TLS protocol assignment dropped TLS 1.3 support
+echo   - Now uses BITS first, falls back to IWR, then WebClient
+echo   - Properly preserves and restores SecurityProtocol state
+echo   - Updated download size estimate (~170MB, was ~35MB)
+echo   - Increased download timeout to 180s for larger payload
+echo.
+echo PREVIOUS (v2.4):
 echo   - Fixed Test-NetConnection port=0 error (latency test)
 echo   - Fixed SSL/TLS download failure under VPN/proxy (Mullvad, Tailscale)
 echo   - Multiple fallback URLs for internet speed test
@@ -667,9 +731,11 @@ echo 3. TOOLS MAY BE CORRUPTED
 echo    Solution: Use Menu Option 4 to verify integrity
 echo              Then Option 5 to re-download if needed
 echo.
-echo 4. DOWNLOAD FAILS (SSL/TLS error)
-echo    Cause: VPN or proxy performing TLS inspection
-echo    This is auto-handled in v2.4 for most cases.
+echo 4. DOWNLOAD FAILS (SSL/TLS / connection closed)
+echo    Cause: Forced TLS 1.2-only (v2.4) dropped TLS 1.3 support after
+echo    Microsoft/Akamai endpoint hardening around April 2026.
+echo    v2.5 fix: tries BITS, then Invoke-WebRequest, then WebClient,
+echo    with TLS 1.2 + 1.3 negotiated additively.
 echo    Manual fallback:
 echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
 echo    Extract to: %SCRIPT_DIR%\Sysinternals\
