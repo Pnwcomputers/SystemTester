@@ -22,6 +22,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.5] - 2026-05-01
+
+### 🚀 Added
+- **TLS 1.3 Support**: Rewrote download engine to support modern TLS 1.3/1.2 protocols via bitwise OR mask, preventing "Connection Closed" errors on Microsoft CDNs.
+- **Enhanced GPU Reporting**: Implemented registry-level VRAM detection to bypass the 4GB WMI truncation bug; now accurately reports high-end cards (e.g., RTX 5070 12GB).
+- **Multi-GPU Intelligence**: Added system-wide GPU memory aggregation for machines with both iGPU and discrete graphics.
+- **Expanded NIC Filtering**: Added ZeroTier, AnyConnect, GlobalProtect, Fortinet, and more to the virtual adapter exclusion list.
+
+### 🔧 Fixed
+- **Launcher Awareness**: Fixed a critical bug where the script failed to detect the .bat launcher on PowerShell 5.1.
+- **Network Speed Logic**: Switched Mbps calculations to base-10 to match ISP reporting and added a 1MB sanity floor to prevent false "slow internet" warnings from error pages.
+- **Storage Diagnostics**: Rewrote disk performance tests to use `WriteThrough` flags, ensuring real disk throughput is measured rather than system cache.
+- **Recommendation Engine**: Refined regex logic to eliminate false positives for "System Corruption" and "Windows Update Stopped" (now checks StartType).
+- **Security**: Implemented `try/finally` blocks to ensure system SSL certificate callbacks are always restored to default state after testing.
+
+### 📈 Changed
+- Updated Sysinternals Suite size estimate to ~170MB.
+- Increased download timeout to 180s to accommodate larger payloads on slower links.
+- "EXCELLENT" status now only triggers if zero warnings/critical issues are found by the engine.
+
+---
+
 ## [2.4.0] - 2026-04-23
 
 ### Fixed
