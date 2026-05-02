@@ -68,6 +68,7 @@ v2.5 focuses on fixing real-world network testing failures observed in the field
  
 ## Key Capabilities
  
+* **Zero-Install**: Portable execution from USB or network drives.
 * **One-click Menu or Autorun** — interactive menu or `-AutoRun` parameter
 * **Output Cleaner** — removes banners, EULA text, usage blocks for readable reports
 * **Comprehensive Tests** — CPU, RAM, Disk, GPU, Network, OS Health, Windows Update status
