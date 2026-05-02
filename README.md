@@ -29,20 +29,20 @@ v2.5 focuses on fixing real-world network testing failures observed in the field
  
 | # | Area | Issue | Impact |
 |---|------|--------|--------|
-| 1 | Network Latency | `$targetPort` was never defined — `Test-NetConnection` received `Port=0` and threw a validation error on every run | **Critical** — latency test always failed |
-| 2 | Network Latency | `PsPing` output regex was too strict — minor whitespace variations caused "Unable to parse" on valid results | Medium — latency stats silently dropped |
-| 3 | Network Speed | Single hardcoded Hetzner HTTPS URL failed under VPN/proxy TLS interception (e.g. Mullvad) | High — speed test failed on VPN-connected machines |
-| 4 | Network Speed | No fallback if the download URL failed | Medium — single point of failure |
-| 5 | Recommendations | VMware VMnet and VPN virtual adapters (Mullvad, Tailscale) were flagged as "slow physical NICs" at 100 Mbps | Low — false positive recommendation |
-| 6 | Reports | Report files written as UTF-8 with Unicode bullets (`•`) and arrows (`->`) rendered as mojibake (`â€¢ â†'`) in Notepad and legacy viewers | Medium — garbled report output |
-| 7 | Reports | Box-drawing characters (`└─`) in the menu display caused non-ASCII bytes in the script itself | Low — cosmetic |
-| 8 | Batch Launcher | `VERIFY` section exit-code branching silently swallowed function output | Low — misleading success messages |
-| 9 | Batch Launcher | Sysinternals download had no SSL bypass — same VPN TLS issue as PS1 | High — download failed on VPN machines |
+| 1 | Network Latency | `$targetPort` was never defined: `Test-NetConnection` received `Port=0` and threw a validation error on every run | **Critical**: latency test always failed |
+| 2 | Network Latency | `PsPing` output regex was too strict: minor whitespace variations caused "Unable to parse" on valid results | Medium: latency stats silently dropped |
+| 3 | Network Speed | Single hardcoded Hetzner HTTPS URL failed under VPN/proxy TLS interception (e.g. Mullvad) | High: speed test failed on VPN-connected machines |
+| 4 | Network Speed | No fallback if the download URL failed | Medium: single point of failure |
+| 5 | Recommendations | VMware VMnet and VPN virtual adapters (Mullvad, Tailscale) were flagged as "slow physical NICs" at 100 Mbps | Low: false positive recommendation |
+| 6 | Reports | Report files written as UTF-8 with Unicode bullets (`•`) and arrows (`->`) rendered as mojibake (`â€¢ â†'`) in Notepad and legacy viewers | Medium: garbled report output |
+| 7 | Reports | Box-drawing characters (`└─`) in the menu display caused non-ASCII bytes in the script itself | Low: cosmetic |
+| 8 | Batch Launcher | `VERIFY` section exit-code branching silently swallowed function output | Low: misleading success messages |
+| 9 | Batch Launcher | Sysinternals download had no SSL bypass: same VPN TLS issue as PS1 | High: download failed on VPN machines |
  
 ### What Changed Technically
  
 **`Test-NetworkLatency`**
-- Removed the undefined `$targetPort` variable entirely — ICMP ping does not require a port
+- Removed the undefined `$targetPort` variable entirely: ICMP ping does not require a port
 - Removed `-Port` and `-InformationLevel Detailed` from `Test-NetConnection` (both require a valid port number)
 - Made `PsPing` ICMP args use bare IP instead of `IP:Port` format
 - Widened PsPing regex to allow variable whitespace (`\s*` instead of literal spaces)
@@ -51,7 +51,7 @@ v2.5 focuses on fixing real-world network testing failures observed in the field
 - Replaced single Hetzner URL with a 3-URL fallback chain: Cloudflare → Hetzner HTTP → OVH
 - Added `[Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }` before each attempt to bypass VPN/proxy MITM certificate interception, restored immediately after
 - Added minimum file size check (1000 bytes) so an error HTML page returned by a firewall isn't measured as a "successful" download
-**Recommendation Engine — NIC check**
+**Recommendation Engine: NIC check**
 - Now iterates adapter lines individually rather than pattern-matching the whole output block
 - Skips lines matching: `VMware`, `VMnet`, `Virtual`, `vEthernet`, `Tailscale`, `Mullvad`, `WireGuard`, `Loopback`, `Hyper-V`, `VPN`, `TAP-Windows`, `OpenVPN`
 - Only physical adapters at 10/100 Mbps generate a recommendation
@@ -59,32 +59,32 @@ v2.5 focuses on fixing real-world network testing failures observed in the field
 - All `•` replaced with `*`, all `->` were already ASCII but confirmed clean
 - `Out-File` changed from `-Encoding UTF8` to `-Encoding ASCII`
 - Removed Unicode box-drawing characters (`└─`) from the menu display strings
-- Script itself is now fully 7-bit ASCII — no encoding surprises in any viewer
+- Script itself is now fully 7-bit ASCII: no encoding surprises in any viewer
 **Batch Launcher (`SystemTester.bat`)**
 - Added the same SSL bypass pattern to the Sysinternals Suite download block
-- Simplified VERIFY section — removed exit-code branching that produced misleading results
+- Simplified VERIFY section: removed exit-code branching that produced misleading results
 - Removed stale reference to legacy `SystemTester_FIXED.ps1` filename from the error message
 ---
  
 ## Key Capabilities
  
 * **Zero-Install**: Portable execution from USB or network drives.
-* **One-click Menu or Autorun** — interactive menu or `-AutoRun` parameter
-* **Output Cleaner** — removes banners, EULA text, usage blocks for readable reports
-* **Comprehensive Tests** — CPU, RAM, Disk, GPU, Network, OS Health, Windows Update status
+* **One-click Menu or Autorun**: interactive menu or `-AutoRun` parameter
+* **Output Cleaner**: removes banners, EULA text, usage blocks for readable reports
+* **Comprehensive Tests**: CPU, RAM, Disk, GPU, Network, OS Health, Windows Update status
 * **Smart Hardware Detection**: Accurate VRAM reporting for modern GPUs (RTX 30/40/50-series) bypassing WMI 4GB limits.
-* **Enhanced GPU Testing** — Multi-GPU support, NVIDIA/AMD vendor tools, display configuration
-* **Network Speed & Latency** — Multi-URL fallback download test, PsPing integration, VPN-aware
+* **Enhanced GPU Testing**: Multi-GPU support, NVIDIA/AMD vendor tools, display configuration
+* **Network Speed & Latency**: Multi-URL fallback download test, PsPing integration, VPN-aware
 * **Deep Diagnostics**: Automated DISM/SFC, Storage health, and Network throughput testing.
-* **Tool Integrity Verification** — Digital signature checking for all Sysinternals tools
-* **Smart Reporting** — timestamped Clean Summary + Detailed TXT reports with recommendations
-* **Fully Portable** — runs from USB; no installation required
-* **Graceful Degradation** — missing tools detected and skipped automatically
-* **Robust Elevation Handling** — reliable admin detection (Windows Home compatible)
-* **Auto-Download Tools** — built-in Sysinternals Suite downloader via batch launcher
+* **Tool Integrity Verification**: Digital signature checking for all Sysinternals tools
+* **Smart Reporting**: timestamped Clean Summary + Detailed TXT reports with recommendations
+* **Fully Portable**: runs from USB; no installation required
+* **Graceful Degradation**: missing tools detected and skipped automatically
+* **Robust Elevation Handling**: reliable admin detection (Windows Home compatible)
+* **Auto-Download Tools**: built-in Sysinternals Suite downloader via batch launcher
 * **Resilient Downloads**: Triple-redundant download engine (BITS > IWR > WebClient) for Sysinternals utilities.
-* **Windows Update Integration** — checks pending updates and service status
-* **Modern PowerShell** — uses CIM instances (not deprecated WMI) for better performance
+* **Windows Update Integration**: checks pending updates and service status
+* **Modern PowerShell**: uses CIM instances (not deprecated WMI) for better performance
 ---
  
 ## 📋 Requirements
@@ -178,14 +178,14 @@ For enhanced GPU testing:
 | 14 | Hardware Events | WHEA error logs (last 7 days) | Event Viewer |
 | 15 | Windows Update | Pending updates, service status | Windows Update COM API |
  
-### Network Testing (Option 7) — v2.5 Changes
+### Network Testing (Option 7): v2.5 Changes
  
 The network test was the most heavily revised area in v2.5. Specific improvements:
  
 * **Speed test** now tries three servers in sequence (Cloudflare, Hetzner HTTP, OVH) and stops at the first success, rather than failing outright if the single Hetzner HTTPS URL is blocked or intercepted
 * **SSL certificate bypass** is applied per-attempt and restored immediately after, handling VPN and proxy setups that perform TLS interception (Mullvad, corporate proxies, etc.)
 * **Latency test** now runs without a port parameter, so the `Test-NetConnection` ICMP ping actually executes on every system instead of throwing a port validation error
-* **PsPing** parsing is more flexible — results are captured correctly across different PsPing output formats
+* **PsPing** parsing is more flexible: results are captured correctly across different PsPing output formats
 * **Adapter recommendations** no longer flag VMware, Hyper-V, Tailscale, Mullvad, or other virtual adapters as "slow physical NICs"
 ---
  
@@ -272,7 +272,7 @@ RECOMMENDATIONS:
 For detailed output, see: SystemTest_Detailed_20260423_143022.txt
 ```
  
-Note: Report files use plain ASCII — bullets are `*` and arrows are `->`. This ensures correct display in Notepad, legacy terminals, and any text viewer without encoding configuration.
+Note: Report files use plain ASCII: bullets are `*` and arrows are `->`. This ensures correct display in Notepad, legacy terminals, and any text viewer without encoding configuration.
  
 ---
  
@@ -280,13 +280,13 @@ Note: Report files use plain ASCII — bullets are `*` and arrows are `->`. This
  
 The batch launcher (`SystemTester.bat`) provides:
  
-1. **Run Interactive Menu** — Select individual tests (includes GPU sub-options 12, 12a, 12b, 12c)
-2. **Run ALL Tests Automatically** — Complete system scan with auto-report
-3. **Fix PowerShell Execution Policy** — Set CurrentUser to RemoteSigned
-4. **Verify Tool Integrity** — Check digital signatures and file sizes of Sysinternals tools
-5. **Download/Update Sysinternals Suite** — Auto-download from Microsoft (~35 MB); VPN-compatible in v2.5
-6. **GPU Testing Tools Manager** — Download and manage GPU testing tools
-7. **Help / Troubleshooting** — Comprehensive troubleshooting guide updated for v2.5
+1. **Run Interactive Menu**: Select individual tests (includes GPU sub-options 12, 12a, 12b, 12c)
+2. **Run ALL Tests Automatically**: Complete system scan with auto-report
+3. **Fix PowerShell Execution Policy**: Set CurrentUser to RemoteSigned
+4. **Verify Tool Integrity**: Check digital signatures and file sizes of Sysinternals tools
+5. **Download/Update Sysinternals Suite**: Auto-download from Microsoft (~35 MB); VPN-compatible in v2.5
+6. **GPU Testing Tools Manager**: Download and manage GPU testing tools
+7. **Help / Troubleshooting**: Comprehensive troubleshooting guide updated for v2.5
 8. **Exit**
 ---
  
@@ -298,7 +298,7 @@ The batch launcher (`SystemTester.bat`) provides:
 If all three fail, check firewall rules blocking outbound HTTP/HTTPS.
  
 ### Latency test always fails with "Port" error
-**Cause:** Bug in v2.21 — an undefined `$targetPort` variable caused `Test-NetConnection` to receive `Port=0`, which Windows rejects.
+**Cause:** Bug in v2.21: an undefined `$targetPort` variable caused `Test-NetConnection` to receive `Port=0`, which Windows rejects.
 **Status:** Fixed in v2.5.
  
 ### PsPing shows "Unable to parse latency results"
@@ -324,7 +324,7 @@ If all three fail, check firewall rules blocking outbound HTTP/HTTPS.
 **Solution:** Use launcher Menu Option 5 to auto-download, or manually download from [live.sysinternals.com](https://live.sysinternals.com).
  
 ### Reports not found after running tests
-Reports are saved to a `Reports\` subfolder inside the script directory — not the script root itself.
+Reports are saved to a `Reports\` subfolder inside the script directory: not the script root itself.
  
 Full path: `<script directory>\Reports\SystemTest_Clean_*.txt`
  
@@ -332,7 +332,7 @@ The `Reports\` folder is created automatically the first time a report is genera
 - Confirm tests were run before generating the report (PS1 menu option 17, or use autorun)
 - Check the script directory is not read-only (this can occur on some USB drives formatted as FAT32 with a write-protect switch)
 - The console output after report generation always shows the exact file paths
-### Tests taking too long — expected durations
+### Tests taking too long: expected durations
 - CPU Performance: ~10 seconds
 - Power/Energy Report: ~15 seconds (admin only)
 - Windows Update Search: 30-90 seconds
@@ -344,14 +344,14 @@ The `Reports\` folder is created automatically the first time a report is genera
  
 * **No Telemetry:** Script does not send data anywhere; purely local operation
 * **Auto-Download:** Downloads only from official Microsoft servers (download.sysinternals.com)
-* **Report Contents:** Includes computer name, hardware details, installed driver paths — review before sharing with clients
+* **Report Contents:** Includes computer name, hardware details, installed driver paths: review before sharing with clients
 * **Admin Rights:** Required for DISM, SFC, energy reports, SMART data, Windows Update queries
 * **SSL Bypass:** The certificate validation bypass used during speed/download tests is scoped per-request and restored immediately. It does not persist after the test completes.
 ---
  
 ## Version History
  
-### v2.5 — April 2026
+### v2.5: April 2026
 - Fixed latency test crash: removed undefined `$targetPort` and broken `Test-NetConnection` args
 - Fixed speed test SSL failure under VPN/proxy TLS interception
 - Added 3-URL fallback chain for speed test (Cloudflare, Hetzner HTTP, OVH)
@@ -368,7 +368,7 @@ The `Reports\` folder is created automatically the first time a report is genera
 - Batch: Removed stale `SystemTester_FIXED.ps1` legacy filename reference
 - Batch: Updated Help section to document v2.5 changes
 - Batch: EXIT screen updated to show `Reports\` subfolder path
-### v2.21 — 2025
+### v2.21: 2025
 - Added tool integrity verification (digital signature checking)
 - Added dual report system (Clean Summary + Detailed)
 - Fixed memory usage calculation (FreePhysicalMemory unit conversion)
@@ -378,7 +378,7 @@ The `Reports\` folder is created automatically the first time a report is genera
 - Added Windows Update integration
 - Added WHEA hardware event log check
 - Added network speed and latency testing (initial implementation)
-### v2.0 — 2024
+### v2.0: 2024
 - Complete rewrite with modular function structure
 - Added interactive menu system
 - Added `-AutoRun` parameter for unattended operation
@@ -436,22 +436,22 @@ The `Reports\` folder is created automatically the first time a report is genera
 ### GPU Stress Testing (Optional)
  
 Recommended tools via launcher Option 6 -> 4:
-- **FurMark** — GPU stress test (generates significant heat — use with caution on laptops)
-- **3DMark** — Industry standard benchmark
-- **Unigine Heaven/Valley** — Graphics stress testing
-- **OCCT** — Error detection and stability testing
+- **FurMark**: GPU stress test (generates significant heat: use with caution on laptops)
+- **3DMark**: Industry standard benchmark
+- **Unigine Heaven/Valley**: Graphics stress testing
+- **OCCT**: Error detection and stability testing
 ---
  
 ## Contributing
  
 Contributions welcome. Priority areas:
  
-* **Bug reports** — test on varied hardware and network environments
-* **Parsers** — new tool output cleaners for additional Sysinternals tools
-* **Tests** — additional diagnostic modules (audio, temperatures, peripherals)
-* **GPU** — Intel Arc integration
-* **Network** — additional connectivity and performance tests
-* **Documentation** — screenshots, wiki articles, tutorial content
+* **Bug reports**: test on varied hardware and network environments
+* **Parsers**: new tool output cleaners for additional Sysinternals tools
+* **Tests**: additional diagnostic modules (audio, temperatures, peripherals)
+* **GPU**: Intel Arc integration
+* **Network**: additional connectivity and performance tests
+* **Documentation**: screenshots, wiki articles, tutorial content
 **Before contributing:**
 1. Open an issue to discuss large changes
 2. Follow existing code style
@@ -474,7 +474,7 @@ Contributions welcome. Priority areas:
  
 ## License
  
-MIT License — See [LICENSE](LICENSE) file for details.
+MIT License: See [LICENSE](LICENSE) file for details.
  
 **Copyright (c) 2025 Pacific Northwest Computers**
  
@@ -494,20 +494,20 @@ MIT License — See [LICENSE](LICENSE) file for details.
  
 ## Support
  
-* **Bug Reports:** Open a GitHub issue — include OS build, GPU type, admin status, and full error message
+* **Bug Reports:** Open a GitHub issue: include OS build, GPU type, admin status, and full error message
 * **Feature Requests:** Start a GitHub discussion
 * **Commercial Support:** jon@pnwcomputers.com / 360-624-7379
 ---
  
 ## Acknowledgments
  
-* **Microsoft Sysinternals Team** — For the diagnostic tools this project is built around
-* **Mark Russinovich** — For creating and maintaining Sysinternals
-* **NVIDIA & AMD** — For providing diagnostic APIs
-* **TechPowerUp** — For GPU-Z
-* **PowerShell Community** — For patterns and best practices
+* **Microsoft Sysinternals Team**: For the diagnostic tools this project is built around
+* **Mark Russinovich**: For creating and maintaining Sysinternals
+* **NVIDIA & AMD**: For providing diagnostic APIs
+* **TechPowerUp**: For GPU-Z
+* **PowerShell Community**: For patterns and best practices
 ---
  
-*Tested on Windows 10 (1909+) and Windows 11 — Enterprise, Pro, Home & Server editions*
+*Tested on Windows 10 (1909+) and Windows 11: Enterprise, Pro, Home & Server editions*
  
 **Last Updated:** AMay 2026 | **Version:** 2.5 | **Status:** Production Ready
