@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔧 Fixed
+- **Network Speed Test — TLS negotiation**: Enabled TLS 1.2/1.3 additively before each download attempt (with per-protocol fallback so it won't throw on older .NET runtimes) and restored the prior `SecurityProtocol` afterward. Prevents the HTTPS test URLs (e.g. Cloudflare) from failing silently on PowerShell 5.1 systems that default to TLS 1.0/1.1.
+- **Network Speed Test — PowerShell 7+ cert bypass**: Added `-SkipCertificateCheck` on PowerShell 7+, where `Invoke-WebRequest` uses `HttpClient` and ignores the `ServicePointManager` certificate callback used to handle VPN/proxy TLS interception (Mullvad, Tailscale, etc.).
+- **Network Speed Test — status reporting**: Reset `$status` to `SUCCESS` on a successful download so an earlier `Get-NetAdapter` failure no longer mislabels a working speed test as `FAILED`.
+
 ### Planned
 - HTML report export with charts and graphs
 - Baseline comparison mode (compare current vs. previous test run)

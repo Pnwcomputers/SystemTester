@@ -525,6 +525,10 @@ function Test-Storage {
     } catch {
         Write-Host "Disk test failed: $($_.Exception.Message)" -ForegroundColor Yellow
         if ($testFile -and (Test-Path $testFile)) { Remove-Item $testFile -ErrorAction SilentlyContinue }
+        $script:TestResults += @{
+            Tool="Disk-Performance"; Description="Disk performance test"
+            Status="FAILED"; Output="Disk test failed: $($_.Exception.Message)"; Duration=0
+        }
     }
 }
 
@@ -762,11 +766,14 @@ function Test-OSHealth {
     try {
         $start = Get-Date
         $dism = (dism /Online /Cleanup-Image /ScanHealth) 2>&1 | Out-String
+        $dismExitCode = $LASTEXITCODE
         $sfc = (sfc /scannow) 2>&1 | Out-String
         $duration = ((Get-Date) - $start).TotalMilliseconds
 
         $summary = "DISM:`n" + (($dism -split "`n" | Where-Object {$_ -match "No component|repairable|error"} | Select-Object -First 3) -join "`n")
         $summary += "`n`nSFC:`n" + (($sfc -split "`n" | Where-Object {$_ -match "did not find|found corrupt|Protection"} | Select-Object -First 3) -join "`n")
+        # Embed exit code for language-neutral detection in the recommendations engine
+        $summary += "`nDISM-ExitCode: $dismExitCode"
 
         $script:TestResults += @{
             Tool="OS-Health"; Description="DISM+SFC integrity"
@@ -884,7 +891,15 @@ function Get-AccurateVRAM {
                         if ($props -and $props.MatchingDeviceId -and
                             $props.MatchingDeviceId -match [regex]::Escape($devicePattern)) {
                             $qword = $props.'HardwareInformation.qwMemorySize'
-                            if ($qword -and $qword -gt 0) { return [int64]$qword }
+                            if ($qword) {
+                                # REG_BINARY (byte[]) on some drivers; REG_QWORD (int64) on others
+                                $vramBytes = if ($qword -is [byte[]] -and $qword.Length -ge 8) {
+                                    [System.BitConverter]::ToInt64($qword, 0)
+                                } else {
+                                    try { [int64]$qword } catch { 0L }
+                                }
+                                if ($vramBytes -gt 0) { return $vramBytes }
+                            }
                         }
                     }
                 }
@@ -1189,20 +1204,22 @@ function Test-GPUVendorSpecific {
             Write-Host "NVIDIA GPU detected - running nvidia-smi from $nvidiaSmi..." -ForegroundColor Yellow
 
             $nvidiaOutput = & $nvidiaSmi --query-gpu=name,driver_version,temperature.gpu,utilization.gpu,memory.total,memory.used,power.draw,clocks.current.graphics,clocks.current.memory --format=csv 2>&1 | Out-String
+            $nvidiaSmiStatus = if ($LASTEXITCODE -eq 0) { "SUCCESS" } else { "FAILED" }
 
             $script:TestResults += @{
                 Tool="NVIDIA-SMI"; Description="NVIDIA GPU metrics"
-                Status="SUCCESS"; Output=$nvidiaOutput; Duration=500
+                Status=$nvidiaSmiStatus; Output=$nvidiaOutput; Duration=500
             }
 
             Write-Host "NVIDIA metrics collected" -ForegroundColor Green
 
             # Get more detailed info
             $detailedOutput = & $nvidiaSmi -q 2>&1 | Out-String
+            $nvidiaDetailedStatus = if ($LASTEXITCODE -eq 0) { "SUCCESS" } else { "FAILED" }
 
             $script:TestResults += @{
                 Tool="NVIDIA-SMI-Detailed"; Description="NVIDIA detailed info"
-                Status="SUCCESS"; Output=$detailedOutput; Duration=500
+                Status=$nvidiaDetailedStatus; Output=$detailedOutput; Duration=500
             }
 
         } else {
@@ -1322,9 +1339,8 @@ function Test-GPUMemory {
                     $usage += "VRAM Utilization: $usagePct%"
                 }
                 $usage += "Active GPU processes: $activeProcesses"
-            } elseif ($gpuCount -gt 1) {
-                # Multi-GPU: don't divide aggregate by per-GPU total - it's nonsense.
-                # See GPU-Memory-Total entry below for system-wide stats.
+            } elseif ($countersAvailable -and $gpuCount -gt 1) {
+                # Multi-GPU with counters: aggregate is available in the system-wide entry.
                 $usage += "Note: Multi-GPU system - per-adapter VRAM usage is not"
                 $usage += "      reliably reported by Windows performance counters."
                 $usage += "      See GPU-Memory-Total entry for system-wide totals."
@@ -1787,18 +1803,29 @@ function New-Report {
             $recommendations += "  -> Re-enable: Set-Service wuauserv -StartupType Manual"
             $recommendations += "  -> Verify in services.msc"
         }
+
+        if ($updateInfo.Output -match "Search failed:") {
+            $recommendations += "* WARNING: Windows Update search failed"
+            $recommendations += "  -> Try: Stop-Service wuauserv; Start-Service wuauserv"
+            $recommendations += "  -> Check BITS and Cryptographic Services are running"
+            $recommendations += "  -> If persistent: DISM /Online /Cleanup-Image /RestoreHealth"
+        }
     }
 
     # === OS HEALTH (DISM/SFC) ===
     $osHealth = $TestResults | Where-Object {$_.Tool -eq "OS-Health"}
     if ($osHealth -and $osHealth.Status -eq "SUCCESS") {
-        # FIX v2.5.1: Original regex matched "corrupt" inside DISM's standard
-        # negative phrasing ("No component store corruption detected"), causing
-        # constant false positives on healthy systems. Match only affirmative
-        # findings; explicitly exclude the negative-phrasing patterns.
         $oh = $osHealth.Output
-        if ($oh -match "found corrupt|store is repairable|requires repair|cannot repair|integrity violations" -and
-            $oh -notmatch "did not find any integrity violations|No component store corruption") {
+        # Language-neutral: DISM exit code 11 = repairable corruption; any non-zero = error.
+        # Embedded by Test-OSHealth as "DISM-ExitCode: N" for coverage on non-English systems.
+        $dismExitBad = ($oh -match 'DISM-ExitCode: (\d+)') -and ([int]$matches[1] -ne 0)
+        # Text-based detection (English systems): also catches SFC findings.
+        # Added "DISM encountered|could not perform" to cover DISM runtime failures that were
+        # previously matched by the removed "error" term. Added "No integrity violations" to
+        # the notmatch guard to prevent a false positive from DISM /CheckHealth clean output.
+        $textMatch = $oh -match "found corrupt|store is repairable|requires repair|cannot repair|integrity violations|DISM encountered|could not perform the requested operation"
+        $notNegative = $oh -notmatch "did not find any integrity violations|No component store corruption|No integrity violations"
+        if (($dismExitBad -or $textMatch) -and $notNegative) {
             $recommendations += "* WARNING: System file corruption detected"
             $recommendations += "  -> Run: DISM /Online /Cleanup-Image /RestoreHealth"
             $recommendations += "  -> Then run: sfc /scannow"
