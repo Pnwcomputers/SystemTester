@@ -601,18 +601,29 @@ function Test-NetworkSpeed {
         # unconditionally. Previous code skipped restore when prev was $null (the
         # default state), leaking the { $true } override across the session.
         $prevCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+        $prevProtocol = [Net.ServicePointManager]::SecurityProtocol
         try {
             $tempFile = [System.IO.Path]::GetTempFileName()
             Write-Host "Trying download test: $testUrl" -ForegroundColor Yellow
 
             # Temporarily bypass SSL cert validation - handles VPN/proxy MITM (Mullvad, Tailscale, etc.)
             [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+            # Ensure TLS 1.2/1.3 are enabled additively; PS 5.1 may default to TLS 1.0/1.1 only.
+            # Use try/catch per protocol: Tls13 requires .NET 4.8+ and throws on older runtimes.
+            $tlsProto = $prevProtocol
+            try { $tlsProto = $tlsProto -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+            try { $tlsProto = $tlsProto -bor [Net.SecurityProtocolType]::Tls13 } catch {}
+            [Net.ServicePointManager]::SecurityProtocol = $tlsProto
 
             $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
             $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
             $iwParams = @{ Uri = $testUrl; OutFile = $tempFile; ErrorAction = "Stop" }
             if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $iwParams.UseBasicParsing = $true }
             if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec'))      { $iwParams.TimeoutSec = 60 }
+            # PS 7+ uses HttpClient; ServicePointManager callback is ignored there, so also set -SkipCertificateCheck
+            if ($PSVersionTable.PSVersion.Major -ge 7 -and $iwc -and $iwc.Parameters.ContainsKey('SkipCertificateCheck')) {
+                $iwParams.SkipCertificateCheck = $true
+            }
             Invoke-WebRequest @iwParams | Out-Null
             $stopwatch.Stop()
 
@@ -638,6 +649,7 @@ function Test-NetworkSpeed {
             $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
             $durationMs = [math]::Round($stopwatch.Elapsed.TotalMilliseconds)
             $downloadDone = $true
+            $status = "SUCCESS"  # reset: download succeeded even if adapter query earlier set this to FAILED
 
         } catch {
             Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
@@ -645,6 +657,7 @@ function Test-NetworkSpeed {
         } finally {
             # Always restore - $null is a valid prior state
             [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCallback
+            [Net.ServicePointManager]::SecurityProtocol = $prevProtocol
             if ($tempFile -and (Test-Path $tempFile)) {
                 Remove-Item $tempFile -ErrorAction SilentlyContinue
             }
