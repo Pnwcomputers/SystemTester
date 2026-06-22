@@ -4,13 +4,13 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Production Ready Version - v2.5
+:: Production Ready Version - v2.6
 :: =====================================================
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
 set "DOWNLOAD_TIMEOUT_SEC=180"
-set "SCRIPT_VERSION=2.5"
+set "SCRIPT_VERSION=2.6"
 if not defined ST_DEBUG set "ST_DEBUG=0"
 set "LAUNCH_LOG=%TEMP%\SystemTester_launcher.log"
 
@@ -413,8 +413,9 @@ echo.
 echo 1. GPU-Z (TechPowerUp) - Detailed GPU monitoring
 echo 2. Check NVIDIA Drivers/Tools
 echo 3. Check AMD Drivers/Tools
-echo 4. Download Recommendations
-echo 5. Return to Main Menu
+echo 4. Download Recommendations (URLs)
+echo 5. Download GPU Tools Automatically
+echo 6. Return to Main Menu
 echo.
 echo --------------------------------------------------------
 echo INSTALLED TOOLS:
@@ -454,7 +455,8 @@ if "%gpu_choice%"=="1" goto GPU_TOOLS_GPUZ
 if "%gpu_choice%"=="2" goto GPU_TOOLS_NVIDIA
 if "%gpu_choice%"=="3" goto GPU_TOOLS_AMD
 if "%gpu_choice%"=="4" goto GPU_TOOLS_RECOMMEND
-if "%gpu_choice%"=="5" goto MENU
+if "%gpu_choice%"=="5" goto GPU_TOOLS_DOWNLOAD
+if "%gpu_choice%"=="6" goto MENU
 
 echo Invalid choice.
 timeout /t 1 >nul
@@ -694,13 +696,161 @@ echo.
 pause
 goto GPU_TOOLS
 
+:GPU_TOOLS_DOWNLOAD
+cls
+echo ========================================================
+echo          GPU TOOLS - AUTO DOWNLOAD MANAGER
+echo ========================================================
+echo.
+echo Tools Directory: %GPU_TOOLS_DIR%
+echo.
+
+:: Ensure Tools directory exists
+if not exist "%GPU_TOOLS_DIR%" (
+    mkdir "%GPU_TOOLS_DIR%" 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Cannot create Tools directory: %GPU_TOOLS_DIR%
+        pause
+        goto GPU_TOOLS
+    )
+)
+
+echo TOOL STATUS:
+echo --------------------------------------------------------
+:: GPU-Z
+if exist "%GPU_TOOLS_DIR%\GPU-Z.exe" (
+    for %%A in ("%GPU_TOOLS_DIR%\GPU-Z.exe") do (
+        if %%~zA LSS 500000 (echo [!] GPU-Z.exe - Incomplete ^(%%~zA bytes^)) else (echo [OK] GPU-Z.exe - Installed ^(%%~zA bytes^))
+    )
+) else (echo [ ] GPU-Z.exe          - Not installed)
+
+:: HWiNFO64
+if exist "%GPU_TOOLS_DIR%\HWiNFO64.exe" (
+    for %%A in ("%GPU_TOOLS_DIR%\HWiNFO64.exe") do echo [OK] HWiNFO64.exe       - Installed ^(%%~zA bytes^)
+) else (echo [ ] HWiNFO64.exe       - Not installed)
+
+:: MSI Afterburner
+if exist "%GPU_TOOLS_DIR%\MSIAfterburnerSetup.zip" (
+    for %%A in ("%GPU_TOOLS_DIR%\MSIAfterburnerSetup.zip") do echo [OK] MSI Afterburner     - Downloaded ^(%%~zA bytes^)
+) else (echo [ ] MSI Afterburner     - Not downloaded)
+
+:: FurMark
+if exist "%GPU_TOOLS_DIR%\FurMark_Setup.exe" (
+    for %%A in ("%GPU_TOOLS_DIR%\FurMark_Setup.exe") do echo [OK] FurMark_Setup.exe  - Installed ^(%%~zA bytes^)
+) else (echo [ ] FurMark_Setup.exe  - Not installed)
+
+echo.
+echo --------------------------------------------------------
+echo DOWNLOAD OPTIONS:
+echo --------------------------------------------------------
+echo.
+echo 1. GPU-Z         - Open browser (site requires manual download)
+echo 2. HWiNFO64      - Open browser (site requires manual download)
+echo 3. MSI Afterburner - Auto-download from MSI servers
+echo 4. FurMark         - Auto-download from Geeks3D
+echo 5. Open all browser downloads at once
+echo 6. Back to GPU Tools Menu
+echo.
+echo Note: Auto-download tries curl.exe, BITS, then Invoke-WebRequest.
+echo --------------------------------------------------------
+echo.
+set /p "dl_choice=Choose (1-6): "
+
+if "%dl_choice%"=="1" goto GPU_DL_GPUZ_BROWSER
+if "%dl_choice%"=="2" goto GPU_DL_HWINFO_BROWSER
+if "%dl_choice%"=="3" goto GPU_DL_AFTERBURNER
+if "%dl_choice%"=="4" goto GPU_DL_FURMARK
+if "%dl_choice%"=="5" goto GPU_DL_ALL_BROWSER
+if "%dl_choice%"=="6" goto GPU_TOOLS
+
+echo Invalid choice.
+timeout /t 1 >nul
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_GPUZ_BROWSER
+echo.
+echo Opening GPU-Z download page...
+start "" "https://www.techpowerup.com/gpuz/"
+echo.
+echo Save the file as: %GPU_TOOLS_DIR%\GPU-Z.exe
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_HWINFO_BROWSER
+echo.
+echo Opening HWiNFO64 download page...
+start "" "https://www.hwinfo.com/download/"
+echo.
+echo Save HWiNFO64.exe to: %GPU_TOOLS_DIR%\HWiNFO64.exe
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_ALL_BROWSER
+echo.
+echo Opening all GPU tool download pages...
+start "" "https://www.techpowerup.com/gpuz/"
+timeout /t 1 >nul
+start "" "https://www.hwinfo.com/download/"
+timeout /t 1 >nul
+start "" "https://www.msi.com/Landing/afterburner"
+timeout /t 1 >nul
+start "" "https://geeks3d.com/furmark/"
+echo.
+echo All pages opened. Save tools to: %GPU_TOOLS_DIR%\
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_AFTERBURNER
+echo.
+echo ========================================================
+echo          DOWNLOADING MSI AFTERBURNER
+echo ========================================================
+echo.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -DownloadGPUTool "MSIAfterburner" -DownloadDir "%GPU_TOOLS_DIR%"
+if errorlevel 1 (
+    echo.
+    echo Auto-download failed. Opening MSI download page instead...
+    timeout /t 2 >nul
+    start "" "https://www.msi.com/Landing/afterburner"
+)
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_FURMARK
+echo.
+echo ========================================================
+echo            DOWNLOADING FURMARK
+echo ========================================================
+echo.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -DownloadGPUTool "FurMark" -DownloadDir "%GPU_TOOLS_DIR%"
+if errorlevel 1 (
+    echo.
+    echo Auto-download failed. Opening FurMark download page instead...
+    timeout /t 2 >nul
+    start "" "https://geeks3d.com/furmark/"
+)
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
 :HELP
 cls
 echo ========================================================
 echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo NEW IN v2.5:
+echo NEW IN v2.6:
+echo   - Fixed speed test: curl.exe ^(WinHTTP/TLS1.3^) now tried first
+echo   - Fixed speed test: BITS added as second method before .NET IWR
+echo   - Fixed speed test: Hetzner URL replaced ^(DNS no longer resolves^)
+echo   - Added GPU Tools Download Manager ^(Menu 6 ^> Option 5^)
+echo     Auto-downloads MSI Afterburner and FurMark; browser for GPU-Z/HWiNFO
+echo.
+echo PREVIOUS (v2.5):
 echo   - Fixed Sysinternals download failure (post 2026-04-28)
 echo   - Root cause: TLS protocol assignment dropped TLS 1.3 support
 echo   - Now uses BITS first, falls back to IWR, then WebClient
@@ -741,9 +891,10 @@ echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
 echo    Extract to: %SCRIPT_DIR%\Sysinternals\
 echo.
 echo 5. NETWORK SPEED TEST FAILS
-echo    Cause: Firewall, VPN, or no internet
-echo    v2.4 tries 3 different servers automatically.
-echo    If all fail, check firewall/proxy settings.
+echo    Cause: TLS 1.3 endpoint + .NET WebRequest incompatibility, or VPN.
+echo    v2.6 fix: tries curl.exe ^(WinHTTP/TLS1.3^) first, then BITS, then .NET IWR.
+echo    Hetzner URL replaced with Tele2 ^(Hetzner hostname no longer resolves^).
+echo    If still failing: disconnect VPN and retry, or check firewall/proxy.
 echo.
 echo 6. TESTS TAKE TOO LONG
 echo    Expected durations:
@@ -779,7 +930,10 @@ echo GPU TESTING:
 echo   Enhanced multi-GPU support
 echo   NVIDIA-SMI integration
 echo   AMD driver detection
-echo   GPU-Z download assistant
+echo   GPU Tools Download Manager ^(Option 6 ^> Option 5^)
+echo     - MSI Afterburner: auto-download ^(curl/BITS/IWR^)
+echo     - FurMark: auto-download ^(curl/BITS/IWR^)
+echo     - GPU-Z, HWiNFO64: browser download ^(site restrictions^)
 echo.
 echo ADMIN DETECTION:
 echo   Auto-elevates on startup
