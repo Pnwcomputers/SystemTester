@@ -1,4 +1,4 @@
-# Portable Sysinternals System Tester v2.6
+# Portable Sysinternals Windows System Testing Utility
 
 <p align="center">
   <img src="assets/systemtester.png" alt="Thumb-drive friendly, no-install Windows hardware health check toolkit powered by Sysinternals and PowerShell." width="600"/>
