@@ -1,4 +1,4 @@
-# Portable Sysinternals Windows 10 & Windows 11 System Tester Utility
+# Portable Sysinternals Windows System Tester Utility
 
 <p align="center">
   <img src="assets/systemtester.png" alt="Thumb-drive friendly, no-install Windows hardware health check toolkit powered by Sysinternals and PowerShell." width="600"/>
