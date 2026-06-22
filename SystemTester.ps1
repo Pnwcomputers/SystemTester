@@ -270,9 +270,10 @@ function Convert-ToolOutput {
     $cleaned = @()
 
     foreach ($line in $lines) {
-        # Skip boilerplate
+        # Skip boilerplate and PowerShell error formatting from 2>&1 stderr capture
         if ($line -match "Copyright|Sysinternals|www\.|EULA|Mark Russinovich|David Solomon|Bryce Cogswell") { continue }
         if ($line -match "^-+$|^=+$|^\*+$") { continue }
+        if ($line -match "NativeCommandError|CategoryInfo|FullyQualifiedErrorId|RemoteException|At .*\.ps1:\d+|^\+\s") { continue }
 
         # Tool-specific filtering
         switch ($ToolName) {
@@ -328,7 +329,7 @@ function Invoke-Tool {
     Write-Host "Running $ToolName..." -ForegroundColor Cyan
     try {
         $start = Get-Date
-        if ($ToolName -in @("psinfo","pslist","handle","autorunsc","testlimit","contig")) {
+        if ($ToolName -in @("psinfo","pslist","handle","autorunsc","testlimit","contig","clockres","du")) {
             $ArgumentList = "-accepteula $ArgumentList"
         }
 
@@ -571,7 +572,7 @@ function Test-Processes {
 # Test: Security
 function Test-Security {
     Write-Host "`n=== Security Analysis ===" -ForegroundColor Green
-    Invoke-Tool -ToolName "autorunsc" -ArgumentList "-a -c" -Description "Autorun entries" -RequiresAdmin $true
+    Invoke-Tool -ToolName "autorunsc" -ArgumentList "-c" -Description "Autorun entries" -RequiresAdmin $true
 }
 
 # Test: Network
