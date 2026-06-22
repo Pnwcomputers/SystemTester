@@ -1,11 +1,15 @@
 # Portable Sysinternals System Tester
 # Created by Pacific Northwest Computers - 2025
-# Complete Production Version - v2.5
+# Complete Production Version - v2.6
 
-param([switch]$AutoRun)
+param(
+    [switch]$AutoRun,
+    [string]$DownloadGPUTool = "",   # e.g. "MSIAfterburner" or "FurMark" - called from bat
+    [string]$DownloadDir = ""        # target directory for the downloaded file
+)
 
 # Constants
-$script:VERSION = "2.5"
+$script:VERSION = "2.6"
 $script:DXDIAG_TIMEOUT = 45
 $script:ENERGY_DURATION = 15
 $script:CPU_TEST_SECONDS = 10
@@ -22,10 +26,35 @@ $script:TestResults = @()
 $script:IsAdmin = $false
 $script:LaunchedViaBatch = $false
 
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "  SYSINTERNALS TESTER v$script:VERSION" -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "Running from: $DriveLetter" -ForegroundColor Cyan
+# ── Startup Banner ───────────────────────────────────────────────────────────
+# Pure-ASCII art — no UTF-8 box-drawing chars. Safe on PS 5.1 regardless of
+# console codepage; some Windows console hosts ignore chcp 65001 and decode
+# output as cp1252, producing mojibake with box-drawing characters.
+# Skipped entirely when invoked in download-only mode (-DownloadGPUTool).
+if (-not $DownloadGPUTool) {
+try { $host.UI.RawUI.WindowTitle = "PNWC System Tester v$script:VERSION" } catch {}
+Clear-Host
+Write-Host ""
+Write-Host "  ######   ##  ##   ##    ##   ######" -ForegroundColor Cyan
+Write-Host "  ##  ##   ### ##   ##    ##   ##    " -ForegroundColor Cyan
+Write-Host "  ######   ######   ## ## ##   ##    " -ForegroundColor Cyan
+Write-Host "  ##       ## ###   ########   ##    " -ForegroundColor Cyan
+Write-Host "  ##       ##  ##   ##    ##   ######" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Pacific Northwest Computers" -ForegroundColor White
+Write-Host "  Portable System Diagnostic Toolkit" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host ("=" * 70) -ForegroundColor DarkCyan
+Write-Host "   PNWC System Tester v$script:VERSION -- Powered by Sysinternals Suite      " -ForegroundColor Cyan
+Write-Host "   Pacific Northwest Computers  |  jon@pnwcomputers.com              " -ForegroundColor Gray
+Write-Host "   CPU / RAM / Disk / GPU / Network / Security / OS Health           " -ForegroundColor DarkGray
+Write-Host ("=" * 70) -ForegroundColor DarkCyan
+Write-Host ""
+Write-Host "  Started  : $(Get-Date -Format 'dddd MMMM dd yyyy  HH:mm:ss')" -ForegroundColor Gray
+Write-Host "  Computer : $env:COMPUTERNAME" -ForegroundColor Gray
+Write-Host "  Drive    : $DriveLetter" -ForegroundColor Gray
+Write-Host ""
+} # end banner block
 
 # Detect if launched via batch file
 # FIX v2.5: .Parent property only exists on Process objects in PowerShell 6+ (Core).
@@ -241,9 +270,10 @@ function Convert-ToolOutput {
     $cleaned = @()
 
     foreach ($line in $lines) {
-        # Skip boilerplate
+        # Skip boilerplate and PowerShell error formatting from 2>&1 stderr capture
         if ($line -match "Copyright|Sysinternals|www\.|EULA|Mark Russinovich|David Solomon|Bryce Cogswell") { continue }
         if ($line -match "^-+$|^=+$|^\*+$") { continue }
+        if ($line -match "NativeCommandError|CategoryInfo|FullyQualifiedErrorId|RemoteException|At .*\.ps1:\d+|^\+\s") { continue }
 
         # Tool-specific filtering
         switch ($ToolName) {
@@ -299,7 +329,7 @@ function Invoke-Tool {
     Write-Host "Running $ToolName..." -ForegroundColor Cyan
     try {
         $start = Get-Date
-        if ($ToolName -in @("psinfo","pslist","handle","autorunsc","testlimit","contig")) {
+        if ($ToolName -in @("psinfo","pslist","handle","autorunsc","testlimit","contig","clockres","du")) {
             $ArgumentList = "-accepteula $ArgumentList"
         }
 
@@ -542,7 +572,7 @@ function Test-Processes {
 # Test: Security
 function Test-Security {
     Write-Host "`n=== Security Analysis ===" -ForegroundColor Green
-    Invoke-Tool -ToolName "autorunsc" -ArgumentList "-a -c" -Description "Autorun entries" -RequiresAdmin $true
+    Invoke-Tool -ToolName "autorunsc" -ArgumentList "-c" -Description "Autorun entries" -RequiresAdmin $true
 }
 
 # Test: Network
@@ -570,7 +600,7 @@ function Test-NetworkSpeed {
     $status = "SUCCESS"
     $durationMs = 0
 
-    # Gather link speed information for active adapters
+    # Gather link speed for active adapters
     try {
         $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq "Up" }
         if ($adapters) {
@@ -586,91 +616,156 @@ function Test-NetworkSpeed {
         $outputLines += "Active Link Speeds: Unable to query adapters ($($_.Exception.Message))"
     }
 
-    # FIX: Multiple fallback URLs + SSL bypass for VPN/proxy environments (e.g. Mullvad)
-    # Tries each URL in order, stops on first success.
+    # Hetzner removed: DNS no longer resolves (hostname retired).
+    # Tele2 added as the HTTP fallback - reliable public speed test server.
     $testUrls = @(
-        "https://speed.cloudflare.com/__down?bytes=10000000"  # Cloudflare - most reliable
-        "http://speed.hetzner.de/10MB.bin"                    # HTTP fallback - no SSL issues
-        "https://proof.ovh.net/files/10Mb.dat"               # OVH fallback
+        "https://speed.cloudflare.com/__down?bytes=10000000"   # Cloudflare CDN
+        "https://speedtest.tele2.net/10MB.zip"                  # Tele2 (HTTP+HTTPS both work)
+        "https://proof.ovh.net/files/10Mb.dat"                  # OVH
     )
 
-    $tempFile = $null
+    $tempFile    = $null
     $downloadDone = $false
 
-    foreach ($testUrl in $testUrls) {
-        if ($downloadDone) { break }
-        $tempFile = $null
-
-        # FIX v2.5 Bug #2: Capture cert callback BEFORE try{}, restore in finally{}
-        # unconditionally. Previous code skipped restore when prev was $null (the
-        # default state), leaking the { $true } override across the session.
-        $prevCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
-        $prevProtocol = [Net.ServicePointManager]::SecurityProtocol
-        try {
+    # ── Method 1: curl.exe (Win10 1803+ / Win11 built-in) ────────────────────────────
+    # Uses WinHTTP/Schannel - supports TLS 1.3 natively, unaffected by .NET
+    # ServicePointManager, and handles VPN/proxy cert injection with --insecure.
+    # This is the primary fix for the "underlying connection was closed" failures
+    # seen with .NET WebRequest on some TLS 1.3-only endpoints.
+    $curlCmd = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curlCmd) {
+        foreach ($testUrl in $testUrls) {
+            if ($downloadDone) { break }
             $tempFile = [System.IO.Path]::GetTempFileName()
-            Write-Host "Trying download test: $testUrl" -ForegroundColor Yellow
+            try {
+                Write-Host "Trying download test: $testUrl" -ForegroundColor Yellow
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                # --insecure bypasses cert check for VPN/proxy MITM (Mullvad, Tailscale, etc.)
+                # --location follows HTTP redirects; --retry 0 avoids double-counting time
+                & curl.exe --silent --show-error --location --output $tempFile `
+                    --max-time 60 --retry 0 --insecure $testUrl 2>&1 | Out-Null
+                $sw.Stop()
+                if ($LASTEXITCODE -ne 0) { throw "curl exited $LASTEXITCODE" }
 
-            # Temporarily bypass SSL cert validation - handles VPN/proxy MITM (Mullvad, Tailscale, etc.)
-            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-            # Ensure TLS 1.2/1.3 are enabled additively; PS 5.1 may default to TLS 1.0/1.1 only.
-            # Use try/catch per protocol: Tls13 requires .NET 4.8+ and throws on older runtimes.
-            $tlsProto = $prevProtocol
-            try { $tlsProto = $tlsProto -bor [Net.SecurityProtocolType]::Tls12 } catch {}
-            try { $tlsProto = $tlsProto -bor [Net.SecurityProtocolType]::Tls13 } catch {}
-            [Net.ServicePointManager]::SecurityProtocol = $tlsProto
+                $sizeBytes = [double](Get-Item $tempFile -ErrorAction Stop).Length
+                if ($sizeBytes -lt 1MB) { throw "Response too small ($sizeBytes bytes) - likely error page" }
 
-            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
-            $iwParams = @{ Uri = $testUrl; OutFile = $tempFile; ErrorAction = "Stop" }
-            if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $iwParams.UseBasicParsing = $true }
-            if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec'))      { $iwParams.TimeoutSec = 60 }
-            # PS 7+ uses HttpClient; ServicePointManager callback is ignored there, so also set -SkipCertificateCheck
-            if ($PSVersionTable.PSVersion.Major -ge 7 -and $iwc -and $iwc.Parameters.ContainsKey('SkipCertificateCheck')) {
-                $iwParams.SkipCertificateCheck = $true
+                $duration = [math]::Max($sw.Elapsed.TotalSeconds, 0.001)
+                $sizeMB   = [math]::Round($sizeBytes / 1MB, 2)
+                $mbps     = [math]::Round(($sizeBytes * 8 / 1000000) / $duration, 2)
+                $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+
+                $outputLines += "Internet Download Test:"
+                $outputLines += "  URL: $testUrl"
+                $outputLines += "  File Size: $sizeMB MB"
+                $outputLines += "  Time: $([math]::Round($duration, 2)) sec"
+                $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
+                $durationMs   = [math]::Round($sw.Elapsed.TotalMilliseconds)
+                $downloadDone = $true
+                $status       = "SUCCESS"
+            } catch {
+                Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
+            } finally {
+                if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -ErrorAction SilentlyContinue }
             }
-            Invoke-WebRequest @iwParams | Out-Null
-            $stopwatch.Stop()
+        }
+    }
 
-            $fileInfo  = Get-Item $tempFile
-            $sizeBytes = [double]$fileInfo.Length
-            # FIX v2.5.1: Test files are 10MB. A 1KB threshold let error pages,
-            # tiny redirects, and partial responses through, producing bogus
-            # "0.01 Mbps" readings. Require at least 1MB for a valid sample.
-            if ($sizeBytes -lt 1MB) { throw "Downloaded file too small ($sizeBytes bytes) - likely error page or redirect" }
+    # ── Method 2: Start-BitsTransfer (BITS service, also WinHTTP, TLS 1.3 capable) ──
+    if (-not $downloadDone) {
+        foreach ($testUrl in $testUrls) {
+            if ($downloadDone) { break }
+            $tempFile = Join-Path $env:TEMP "speedtest_$([guid]::NewGuid().ToString('N')).tmp"
+            try {
+                Write-Host "Trying download test (BITS): $testUrl" -ForegroundColor Yellow
+                Import-Module BitsTransfer -ErrorAction Stop
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                Start-BitsTransfer -Source $testUrl -Destination $tempFile -TransferType Download -ErrorAction Stop
+                $sw.Stop()
 
-            $duration  = [math]::Max($stopwatch.Elapsed.TotalSeconds, 0.001)
-            $sizeMB    = [math]::Round($sizeBytes / 1MB, 2)
-            # FIX v2.5 Bug #5: Mbps is base-10 (1 Mb = 1,000,000 bits), not 1 MiB.
-            # Previous calc using 1MB (=1,048,576) produced mebibits-per-second,
-            # under-reporting throughput by ~4.86%.
-            $mbps      = [math]::Round(($sizeBytes * 8 / 1000000) / $duration, 2)
-            $mbPerSec  = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+                $sizeBytes = [double](Get-Item $tempFile -ErrorAction Stop).Length
+                if ($sizeBytes -lt 1MB) { throw "Response too small ($sizeBytes bytes)" }
 
-            $outputLines += "Internet Download Test:"
-            $outputLines += "  URL: $testUrl"
-            $outputLines += "  File Size: $sizeMB MB"
-            $outputLines += "  Time: $([math]::Round($duration, 2)) sec"
-            $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
-            $durationMs = [math]::Round($stopwatch.Elapsed.TotalMilliseconds)
-            $downloadDone = $true
-            $status = "SUCCESS"  # reset: download succeeded even if adapter query earlier set this to FAILED
+                $duration = [math]::Max($sw.Elapsed.TotalSeconds, 0.001)
+                $sizeMB   = [math]::Round($sizeBytes / 1MB, 2)
+                $mbps     = [math]::Round(($sizeBytes * 8 / 1000000) / $duration, 2)
+                $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
 
-        } catch {
-            Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
-            $outputLines += "Tried $testUrl - Failed: $($_.Exception.Message)"
-        } finally {
-            # Always restore - $null is a valid prior state
-            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCallback
-            [Net.ServicePointManager]::SecurityProtocol = $prevProtocol
-            if ($tempFile -and (Test-Path $tempFile)) {
-                Remove-Item $tempFile -ErrorAction SilentlyContinue
+                $outputLines += "Internet Download Test:"
+                $outputLines += "  URL: $testUrl"
+                $outputLines += "  File Size: $sizeMB MB"
+                $outputLines += "  Time: $([math]::Round($duration, 2)) sec"
+                $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
+                $durationMs   = [math]::Round($sw.Elapsed.TotalMilliseconds)
+                $downloadDone = $true
+                $status       = "SUCCESS"
+            } catch {
+                Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
+            } finally {
+                if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -ErrorAction SilentlyContinue }
+            }
+        }
+    }
+
+    # ── Method 3: Invoke-WebRequest (.NET, last resort, with TLS + cert workarounds) ─
+    if (-not $downloadDone) {
+        foreach ($testUrl in $testUrls) {
+            if ($downloadDone) { break }
+            $prevCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+            $prevProtocol = [Net.ServicePointManager]::SecurityProtocol
+            $tempFile = $null
+            try {
+                $tempFile = [System.IO.Path]::GetTempFileName()
+                Write-Host "Trying download test (IWR): $testUrl" -ForegroundColor Yellow
+
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+                $tlsProto = $prevProtocol
+                try { $tlsProto = $tlsProto -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+                try { $tlsProto = $tlsProto -bor [Net.SecurityProtocolType]::Tls13 } catch {}
+                [Net.ServicePointManager]::SecurityProtocol = $tlsProto
+
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
+                $iwParams = @{ Uri=$testUrl; OutFile=$tempFile; ErrorAction="Stop"; TimeoutSec=60 }
+                if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $iwParams.UseBasicParsing = $true }
+                if ($PSVersionTable.PSVersion.Major -ge 7 -and $iwc -and $iwc.Parameters.ContainsKey('SkipCertificateCheck')) {
+                    $iwParams.SkipCertificateCheck = $true
+                }
+                Invoke-WebRequest @iwParams | Out-Null
+                $sw.Stop()
+
+                $sizeBytes = [double](Get-Item $tempFile -ErrorAction Stop).Length
+                if ($sizeBytes -lt 1MB) { throw "Response too small ($sizeBytes bytes)" }
+
+                $duration = [math]::Max($sw.Elapsed.TotalSeconds, 0.001)
+                $sizeMB   = [math]::Round($sizeBytes / 1MB, 2)
+                $mbps     = [math]::Round(($sizeBytes * 8 / 1000000) / $duration, 2)
+                $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+
+                $outputLines += "Internet Download Test:"
+                $outputLines += "  URL: $testUrl"
+                $outputLines += "  File Size: $sizeMB MB"
+                $outputLines += "  Time: $([math]::Round($duration, 2)) sec"
+                $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
+                $durationMs   = [math]::Round($sw.Elapsed.TotalMilliseconds)
+                $downloadDone = $true
+                $status       = "SUCCESS"
+            } catch {
+                Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
+                $outputLines += "Tried $testUrl - Failed: $($_.Exception.Message)"
+            } finally {
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCallback
+                [Net.ServicePointManager]::SecurityProtocol = $prevProtocol
+                if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -ErrorAction SilentlyContinue }
             }
         }
     }
 
     if (-not $downloadDone) {
-        if ($status -ne "FAILED") { $status = "FAILED" }
-        $outputLines += "Internet Download Test: All URLs failed - check firewall/proxy settings"
+        $status = "FAILED"
+        $outputLines += "Internet Download Test: All methods failed"
+        $outputLines += "  Methods tried: curl.exe (WinHTTP), BITS, Invoke-WebRequest (.NET)"
+        $outputLines += "  Check firewall, VPN, or proxy settings"
     }
 
     $script:TestResults += @{
@@ -1421,15 +1516,21 @@ function Test-Power {
 function Test-HardwareEvents {
     Write-Host "`n=== Hardware Events (WHEA) ===" -ForegroundColor Green
     try {
+        # Level filter: 1=Critical, 2=Error, 3=Warning, 4=Information, 5=Verbose.
+        # WHEA Event ID 1 ("WHEA-Logger operational") fires at Level 4 on every boot
+        # and is not a hardware fault. Without the Level filter every system that
+        # rebooted within the 7-day window would trigger "Hardware errors detected".
         $ev = Get-WinEvent -FilterHashtable @{
             LogName='System'
             ProviderName='Microsoft-Windows-WHEA-Logger'
             StartTime=(Get-Date).AddDays(-7)
-        } -ErrorAction SilentlyContinue | Select-Object -First 10
+        } -ErrorAction SilentlyContinue |
+            Where-Object { $_.Level -le 3 } |
+            Select-Object -First 10
 
         if ($ev) {
             $text = ($ev | ForEach-Object {
-                "[{0:yyyy-MM-dd}] ID {1}: {2}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName
+                "[{0:yyyy-MM-dd}] ID {1} ({2}): {3}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName,$_.Message.Split("`n")[0]
             }) -join "`n"
         } else {
             $text = "No WHEA errors in last 7 days (good)"
@@ -1662,7 +1763,9 @@ function New-Report {
     # === STORAGE HEALTH ===
     $smartInfo = $TestResults | Where-Object {$_.Tool -eq "Storage-SMART"}
     if ($smartInfo -and $smartInfo.Output -notmatch "not available") {
-        if ($smartInfo.Output -match "Warning|Caution|Failed|Degraded") {
+        # "Unhealthy" is the third standard Get-PhysicalDisk HealthStatus value (Healthy/Warning/Unhealthy).
+        # Without it a genuinely failing drive is silently missed.
+        if ($smartInfo.Output -match "Warning|Caution|Failed|Degraded|Unhealthy") {
             $recommendations += "* CRITICAL: Drive health issue detected"
             $recommendations += "  -> BACKUP DATA IMMEDIATELY"
             $recommendations += "  -> Run manufacturer's diagnostic tool"
@@ -1671,22 +1774,26 @@ function New-Report {
     }
 
     # === STORAGE PERFORMANCE ===
-    if ($diskPerf -and $diskPerf.Output -match "Write: ([\d\.]+) MB/s.*Read: ([\d\.]+) MB/s") {
-        $writeSpeed = [float]$matches[1]
-        $readSpeed = [float]$matches[2]
-        
-        # HDD typical: 80-160 MB/s, SSD typical: 200-550 MB/s (SATA), NVMe: 1500+ MB/s
-        if ($writeSpeed -lt 50 -or $readSpeed -lt 50) {
-            $recommendations += "* WARNING: Very slow disk performance detected"
-            $recommendations += "  -> Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
-            $recommendations += "  -> Check for background processes (antivirus, Windows Update)"
-            $recommendations += "  -> Run disk defragmentation (HDD only, not SSD)"
-            $recommendations += "  -> Check disk health with manufacturer tools"
-            $recommendations += "  -> Consider SSD upgrade for significant speed improvement"
-        } elseif ($writeSpeed -lt 100 -or $readSpeed -lt 100) {
-            $recommendations += "* INFO: Moderate disk performance (likely HDD)"
-            $recommendations += "  -> Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
-            $recommendations += "  -> Consider SSD upgrade for 3-5x speed improvement"
+    # Match Write and Read separately: the output stores them on different lines so
+    # a single regex using .* never matches (PowerShell . does not cross newlines).
+    if ($diskPerf) {
+        $writeSpeed = 0.0; $readSpeed = 0.0
+        if ($diskPerf.Output -match "Write: ([\d\.]+) MB/s") { $writeSpeed = [float]$matches[1] }
+        if ($diskPerf.Output -match "Read: ([\d\.]+) MB/s")  { $readSpeed  = [float]$matches[1] }
+        if ($writeSpeed -gt 0 -and $readSpeed -gt 0) {
+            # HDD typical: 80-160 MB/s  |  SATA SSD: 200-550 MB/s  |  NVMe: 1500+ MB/s
+            if ($writeSpeed -lt 50 -or $readSpeed -lt 50) {
+                $recommendations += "* WARNING: Very slow disk performance detected"
+                $recommendations += "  -> Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
+                $recommendations += "  -> Check for background processes (antivirus, Windows Update)"
+                $recommendations += "  -> Run disk defragmentation (HDD only, not SSD)"
+                $recommendations += "  -> Check disk health with manufacturer tools"
+                $recommendations += "  -> Consider SSD upgrade for significant speed improvement"
+            } elseif ($writeSpeed -lt 100 -or $readSpeed -lt 100) {
+                $recommendations += "* INFO: Moderate disk performance (likely HDD)"
+                $recommendations += "  -> Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
+                $recommendations += "  -> Consider SSD upgrade for 3-5x speed improvement"
+            }
         }
     }
 
@@ -1706,15 +1813,6 @@ function New-Report {
             $recommendations += "* NOTICE: High network latency detected (Avg $avgLatency ms)"
             $recommendations += "  -> Check local network congestion"
             $recommendations += "  -> Contact ISP if latency persists"
-        }
-    }
-
-    if ($updateInfo -and $updateInfo.Output -match "Pending: (\d+)") {
-        $pendingUpdates = [int]$matches[1]
-        if ($pendingUpdates -gt 0) {
-            $recommendations += "* ACTION: $pendingUpdates Windows update(s) pending installation"
-            $recommendations += "  -> Install updates via Settings > Windows Update"
-            $recommendations += "  -> Reboot system after installation completes"
         }
     }
 
@@ -1759,7 +1857,7 @@ function New-Report {
             # FIX v2.5 Issue #9: Added ZeroTier, Cisco AnyConnect, GlobalProtect, Fortinet,
             #                    NordLynx, Pulse, Bluetooth PAN, ProtonVPN to exclusion list
             if ($nicLine -match "(10 Mbps|100 Mbps)" -and
-                $nicLine -notmatch "VMware|VMnet|Virtual|vEthernet|Tailscale|Mullvad|WireGuard|Loopback|Hyper-V|VPN|TAP-Windows|OpenVPN|ZeroTier|AnyConnect|GlobalProtect|Fortinet|FortiClient|NordLynx|Pulse|Bluetooth|ProtonVPN|Surfshark") {
+                $nicLine -notmatch "VMware|VMnet|Virtual|vEthernet|Tailscale|Mullvad|WireGuard|Loopback|Hyper-V|VPN|TAP-Windows|OpenVPN|ZeroTier|AnyConnect|GlobalProtect|Fortinet|FortiClient|NordLynx|Pulse|Bluetooth|ProtonVPN|Surfshark|Wi-Fi|Wireless|WLAN") {
                 $physicalSlowAdapter = $true
                 break
             }
@@ -1779,7 +1877,10 @@ function New-Report {
     }
 
     # === WINDOWS UPDATE ===
-    $updateInfo = $TestResults | Where-Object {$_.Tool -eq "Windows-Update"}
+    # Single consolidated block - a previous early check for "Pending > 0" existed
+    # above and produced duplicate/contradictory entries when the count was also
+    # caught by the WARNING or INFO branches here. Removed; all cases handled below.
+    $updateInfo = $TestResults | Where-Object {$_.Tool -eq "Windows-Update"} | Select-Object -Last 1
     if ($updateInfo) {
         if ($updateInfo.Output -match "Pending: (\d+)") {
             $pendingCount = [int]$matches[1]
@@ -1791,7 +1892,11 @@ function New-Report {
             } elseif ($pendingCount -gt 5) {
                 $recommendations += "* INFO: $pendingCount pending Windows Updates available"
                 $recommendations += "  -> Install updates when convenient"
-            } elseif ($pendingCount -eq 0) {
+            } elseif ($pendingCount -gt 0) {
+                $recommendations += "* ACTION: $pendingCount Windows update(s) pending installation"
+                $recommendations += "  -> Install updates via Settings > Windows Update"
+                $recommendations += "  -> Reboot after installation completes"
+            } else {
                 $recommendations += "* GOOD: Windows is up to date"
             }
         }
@@ -1878,7 +1983,7 @@ function New-Report {
 
     # === BATTERY HEALTH (Laptops) ===
     $powerInfo = $TestResults | Where-Object {$_.Tool -eq "Power-Energy"}
-    if ($powerInfo -and $powerInfo.Output -match "Battery") {
+    if ($powerInfo -and $powerInfo.Output -match "Battery: ") {
         if ($powerInfo.Output -match "energy-report.html") {
             $recommendations += "* INFO: Energy report generated"
             $recommendations += "  -> Review energy-report.html for battery health"
@@ -1989,6 +2094,134 @@ function New-Report {
     }
 }
 
+# GPU Tool auto-downloader — called from SystemTester.bat via -DownloadGPUTool param.
+# Uses curl.exe -> BITS -> Invoke-WebRequest in order, stops on first success.
+# Keeping this in PS1 avoids all cmd.exe ^ continuation / delayed-expansion escaping
+# issues that corrupt inline -Command blocks containing ! { } characters.
+function Invoke-GPUToolDownload {
+    param([string]$Tool, [string]$TargetDir)
+
+    if (-not (Test-Path $TargetDir)) {
+        New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+    }
+
+    $config = switch ($Tool) {
+        "MSIAfterburner" { @{
+            Url      = "https://download.msi.com/uti_exe/vga/MSIAfterburnerSetup.zip"
+            File     = "MSIAfterburnerSetup.zip"
+            MinBytes = 1MB
+            Note     = "Extract the ZIP and run MSIAfterburnerSetup.exe to install."
+        }}
+        "FurMark" { @{
+            Url      = "https://geeks3d.com/dl/get/777"
+            File     = "FurMark_Setup.exe"
+            MinBytes = 500KB
+            Note     = "Run FurMark_Setup.exe to install. Generates significant GPU heat - monitor temps."
+        }}
+        default {
+            Write-Host "Unknown tool: $Tool" -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    $outFile = Join-Path $TargetDir $config.File
+    $url     = $config.Url
+    $ok      = $false
+    $lastErr = "(none)"
+
+    Write-Host ""
+    Write-Host "Downloading $Tool..." -ForegroundColor Cyan
+    Write-Host "  URL  : $url" -ForegroundColor Gray
+    Write-Host "  Saved: $outFile" -ForegroundColor Gray
+    Write-Host "  Trying curl.exe, BITS, then Invoke-WebRequest..." -ForegroundColor DarkGray
+    Write-Host ""
+
+    # Method 1: curl.exe (WinHTTP/Schannel - TLS 1.3, VPN-safe)
+    $curlCmd = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curlCmd -and -not $ok) {
+        Write-Host "  Trying curl.exe..." -ForegroundColor Yellow
+        & curl.exe --silent --show-error --location --output $outFile `
+            --max-time 180 --retry 1 --insecure $url 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $outFile)) {
+            $sz = (Get-Item $outFile).Length
+            if ($sz -ge $config.MinBytes) {
+                $ok = $true
+                Write-Host "  [curl.exe] $([math]::Round($sz/1MB,1)) MB downloaded" -ForegroundColor DarkGray
+            } else {
+                Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+                $lastErr = "curl: file too small ($sz bytes - likely an error page)"
+            }
+        } else {
+            $lastErr = "curl exited $LASTEXITCODE"
+        }
+    }
+
+    # Method 2: BITS
+    if (-not $ok) {
+        Write-Host "  Trying BITS..." -ForegroundColor Yellow
+        try {
+            Import-Module BitsTransfer -ErrorAction Stop
+            Start-BitsTransfer -Source $url -Destination $outFile -ErrorAction Stop
+            if (Test-Path $outFile) {
+                $sz = (Get-Item $outFile).Length
+                if ($sz -ge $config.MinBytes) {
+                    $ok = $true
+                    Write-Host "  [BITS] $([math]::Round($sz/1MB,1)) MB downloaded" -ForegroundColor DarkGray
+                } else {
+                    Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+                    $lastErr = "BITS: file too small ($sz bytes)"
+                }
+            }
+        } catch {
+            $lastErr = $_.Exception.Message
+            Write-Host "  BITS failed: $lastErr" -ForegroundColor DarkYellow
+        }
+    }
+
+    # Method 3: Invoke-WebRequest (.NET)
+    if (-not $ok) {
+        Write-Host "  Trying Invoke-WebRequest..." -ForegroundColor Yellow
+        $prevCb   = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+        $prevProt = [Net.ServicePointManager]::SecurityProtocol
+        try {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+            $proto = $prevProt
+            try { $proto = $proto -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+            try { $proto = $proto -bor [Net.SecurityProtocolType]::Tls13 } catch {}
+            [Net.ServicePointManager]::SecurityProtocol = $proto
+
+            Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+            if (Test-Path $outFile) {
+                $sz = (Get-Item $outFile).Length
+                if ($sz -ge $config.MinBytes) {
+                    $ok = $true
+                    Write-Host "  [IWR] $([math]::Round($sz/1MB,1)) MB downloaded" -ForegroundColor DarkGray
+                } else {
+                    Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+                    $lastErr = "IWR: file too small ($sz bytes)"
+                }
+            }
+        } catch {
+            $lastErr = $_.Exception.Message
+            Write-Host "  IWR failed: $lastErr" -ForegroundColor DarkYellow
+        } finally {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCb
+            [Net.ServicePointManager]::SecurityProtocol = $prevProt
+        }
+    }
+
+    Write-Host ""
+    if ($ok) {
+        Write-Host "SUCCESS: $Tool downloaded" -ForegroundColor Green
+        Write-Host "Saved to: $outFile" -ForegroundColor White
+        Write-Host $config.Note -ForegroundColor Cyan
+    } else {
+        Write-Host "ERROR: All download methods failed" -ForegroundColor Red
+        Write-Host "Last error: $lastErr" -ForegroundColor Red
+        exit 1
+    }
+}
+
 # Menu
 function Show-Menu {
     Clear-Host
@@ -2091,6 +2324,15 @@ function Start-Menu {
 
 # Main - only execute if script is run directly (not dot-sourced)
 if ($MyInvocation.InvocationName -ne '.') {
+
+    # Download-only mode: invoked by SystemTester.bat GPU tool download menu.
+    # Runs without the interactive menu or test suite.
+    if ($DownloadGPUTool) {
+        if (-not $DownloadDir) { $DownloadDir = Join-Path $ScriptRoot "Tools" }
+        Invoke-GPUToolDownload -Tool $DownloadGPUTool -TargetDir $DownloadDir
+        exit 0
+    }
+
     try {
         Write-Host "Starting Sysinternals Tester v$script:VERSION..." -ForegroundColor Green
 
