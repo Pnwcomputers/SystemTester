@@ -9,19 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 🔧 Fixed
-- **Network Speed Test — TLS negotiation**: Enabled TLS 1.2/1.3 additively before each download attempt (with per-protocol fallback so it won't throw on older .NET runtimes) and restored the prior `SecurityProtocol` afterward. Prevents the HTTPS test URLs (e.g. Cloudflare) from failing silently on PowerShell 5.1 systems that default to TLS 1.0/1.1.
-- **Network Speed Test — PowerShell 7+ cert bypass**: Added `-SkipCertificateCheck` on PowerShell 7+, where `Invoke-WebRequest` uses `HttpClient` and ignores the `ServicePointManager` certificate callback used to handle VPN/proxy TLS interception (Mullvad, Tailscale, etc.).
-- **Network Speed Test — status reporting**: Reset `$status` to `SUCCESS` on a successful download so an earlier `Get-NetAdapter` failure no longer mislabels a working speed test as `FAILED`.
-- **GPU VRAM detection — REG_BINARY crash**: `Get-AccurateVRAM` silently fell back to the capped 4 GB WMI value on driver versions that store `HardwareInformation.qwMemorySize` as `REG_BINARY` (byte array) instead of `REG_QWORD`. The direct `[int64]` cast would throw and be swallowed by the bare `catch {}`. Now detects the type and converts via `[System.BitConverter]::ToInt64()` when needed.
-- **GPU memory — dangling cross-reference**: On multi-GPU systems where Windows performance counters are unavailable, per-adapter entries directed users to a "GPU-Memory-Total" section that was never created (its guard required both `$gpuCount -gt 1` AND `$countersAvailable`). The cross-reference message now only appears when the aggregate entry will actually be present in the report.
-- **Disk performance — silent failure**: A disk test exception (e.g. `%TEMP%` write denied, out of disk space) printed a console warning but wrote nothing to `$TestResults`, so the failure was invisible in the saved report and excluded from the pass/fail summary counts. The catch block now records a `Status="FAILED"` entry.
-- **OS Health — DISM runtime errors**: The v2.5.1 false-positive fix removed the `"error"` match term from the recommendations regex, inadvertently dropping coverage of `"DISM encountered an error"` — a real failure that was previously caught. Added `"DISM encountered|could not perform the requested operation"` to the positive match to restore this coverage.
-- **OS Health — false-positive guard**: Added `"No integrity violations"` to the `-notmatch` exclusion list to prevent a false corruption warning from DISM `/CheckHealth` clean-system output, which uses different phrasing than `/ScanHealth`.
-- **OS Health — non-English Windows**: DISM and SFC output is fully localized; on non-English Windows the English phrase matching silently produced a false-healthy report on corrupt systems. DISM's exit code (0 = clean, 11 = repairable corruption, other non-zero = error) is now captured and embedded in the stored output as a language-neutral signal used by the recommendations engine.
-- **Windows Update — search failure**: A running-but-broken WU service (e.g. corrupted catalog, `StartType=Manual`) caused the search COM call to throw, writing "Search failed: ..." to the output but triggering no recommendation. Users saw a `SUCCESS` result with no guidance. A `WARNING` recommendation is now emitted when search failure is detected.
-- **NVIDIA SMI — exit code ignored**: Both `nvidia-smi` invocations stored `Status="SUCCESS"` unconditionally regardless of the process exit code. GPU driver errors (e.g. driver not loaded, device unavailable) were silently recorded as passing. The exit code is now checked and mapped to `SUCCESS` or `FAILED` accordingly.
-
 ### Planned
 - HTML report export with charts and graphs
 - Baseline comparison mode (compare current vs. previous test run)
@@ -32,6 +19,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Intel Arc GPU support
 - Network deployment options / centralized log storage
 - Multi-language support
+
+---
+
+## [2.6] - 2026-06-22
+
+### 🚀 Added
+- **PNWC Startup Banner**: Branded ASCII art header (`######  ##  ##  ##    ##  ######`) painted on launch with `Clear-Host` first to eliminate PowerShell startup noise. Shows version, contact, capability summary, timestamp, computer name, and drive. Pure 7-bit ASCII — no UTF-8 box characters that mangle on cp1252 console hosts.
+- **`Invoke-GPUToolDownload` function**: New PS1 function handles automated download of MSI Afterburner and FurMark via curl.exe → BITS → IWR cascade with minimum file-size validation. Accepts `-DownloadGPUTool` and `-DownloadDir` script parameters so the batch launcher can invoke it cleanly via `-File` mode.
+- **Batch: GPU Tools Manager Option 5 — Download GPU Tools Automatically**: Auto-downloads MSI Afterburner (MSI CDN) and FurMark (Geeks3D) directly to the `Tools\` folder without opening a browser. Old Option 5 (Return) moved to Option 6.
+
+### 🔧 Fixed
+- **Network Speed Test — full engine rewrite**: Replaced single-method `Invoke-WebRequest` approach with a three-method cascade: **curl.exe** (primary, WinHTTP/Schannel, native TLS 1.3) → **BITS** (fallback, also WinHTTP) → **Invoke-WebRequest** (last resort with TLS workarounds). Resolves systematic handshake failures on Cloudflare and OVH under Mullvad VPN and similar environments where `.NET ServicePointManager` bypass fires too late in the TLS stack.
+- **Network Speed Test — dead URL**: Replaced `speed.hetzner.de` (hostname retired, DNS failure on all systems) with `speedtest.tele2.net/10MB.zip` in the HTTP fallback slot.
+- **Network Speed Test — TLS negotiation**: Enabled TLS 1.2/1.3 additively before each IWR attempt with per-protocol fallback, restored afterward. Prevents silent failures on PowerShell 5.1 systems that default to TLS 1.0/1.1.
+- **Network Speed Test — PowerShell 7+ cert bypass**: Added `-SkipCertificateCheck` for PowerShell 7+ where `Invoke-WebRequest` uses `HttpClient` and ignores `ServicePointManager` callbacks.
+- **Network Speed Test — status reporting**: Reset `$status` to `SUCCESS` on a successful download so an earlier `Get-NetAdapter` failure no longer mislabels a working speed test as `FAILED`.
+- **Batch Launcher — GPU download parser errors**: `setlocal enabledelayedexpansion` caused `!` characters in inline PowerShell strings (e.g. `heat!`) to be consumed by cmd.exe before PowerShell received the script, producing `Missing closing '}'`, `The Try statement is missing its Catch or Finally block`, and `Unexpected token ')'`. Fixed by moving all download logic into `Invoke-GPUToolDownload` in the PS1; batch now calls `-File "%SCRIPT_PS1%" -DownloadGPUTool "..." -DownloadDir "..."`.
+- **WHEA false positive**: Level 4 informational events from `Microsoft-Windows-WHEA-Logger` — including "WHEA has started" (Event ID 1) which fires on every Windows boot — triggered "Hardware errors detected" on all healthy systems. Added `Where-Object { $_.Level -le 3 }` to restrict to Warning/Error/Critical only.
+- **Disk performance — silent regex failure**: `"Write: ([\d\.]+) MB/s.*Read: ([\d\.]+) MB/s"` used `.*` which cannot cross newlines in PowerShell `-match`. Write and Read speeds are stored on separate output lines, so the regex never matched on any system and disk performance recommendations never fired. Split into two independent `if (-match)` blocks.
+- **Battery false positive on desktops**: `$powerInfo.Output -match "Battery"` matched the string `"No battery (desktop)"` emitted by desktop systems. Changed to `"Battery: "` (colon + space) which only matches actual battery data lines.
+- **Wi-Fi NIC false positive**: 802.11n adapters at 100 Mbps incorrectly triggered "Physical network adapter running at 10/100 Mbps — Upgrade to Gigabit Ethernet." Added `Wi-Fi|Wireless|WLAN` to the adapter line exclusion pattern.
+- **SMART detection — missing status**: `"Unhealthy"` `HealthStatus` from `Get-PhysicalDisk` was absent from the recommendations pattern match. Added alongside `Warning|Caution|Failed|Degraded`.
+- **Windows Update — duplicate recommendations**: Two separate check blocks both fired `"ACTION: N Windows update(s)"` for any `pendingCount > 0`. Removed the early duplicate block; all Windows Update recommendations consolidated into a single block.
+- **Windows Update — 1–5 pending gap**: Removing the early duplicate left systems with 1–5 pending updates producing no recommendation. Added `elseif ($pendingCount -gt 0)` branch to the consolidated block covering the full range: `>20` WARNING, `>5` INFO, `>0` ACTION, `0` GOOD.
+- **GPU VRAM detection — REG_BINARY crash**: `Get-AccurateVRAM` silently fell back to the WMI 4 GB cap when `HardwareInformation.qwMemorySize` was stored as `REG_BINARY` (byte array) instead of `REG_QWORD`. Direct `[int64]` cast threw and was swallowed by bare `catch {}`. Now detects the registry type and converts via `[System.BitConverter]::ToInt64()`.
+- **GPU memory — dangling cross-reference**: On multi-GPU systems without available performance counters, per-adapter entries pointed to a "GPU-Memory-Total" aggregate section that was never written (its guard required both `$gpuCount -gt 1` AND `$countersAvailable`). Cross-reference now only appears when the aggregate section will actually be present.
+- **Disk performance — exception not recorded**: A disk test exception (`%TEMP%` write denied, out of disk space, etc.) printed a console warning but wrote nothing to `$TestResults`, making the failure invisible in the report and excluded from pass/fail counts. Catch block now records `Status="FAILED"`.
+- **OS Health — DISM error coverage restored**: A prior false-positive fix removed `"error"` from the recommendations regex, inadvertently dropping `"DISM encountered an error"`. Restored via `"DISM encountered|could not perform the requested operation"`.
+- **OS Health — false-positive guard**: Added `"No integrity violations"` to the `-notmatch` exclusion list to prevent false corruption warning from DISM `/CheckHealth` output on clean systems.
+- **OS Health — non-English Windows**: DISM and SFC output is localized; English phrase matching silently produced false-healthy results on non-English corrupt systems. DISM exit code (0 = clean, 11 = repairable, other = error) now captured and embedded as a language-neutral signal.
+- **Windows Update — search failure unhandled**: A running-but-broken WU service caused the COM search call to throw, writing "Search failed: ..." to output but triggering no recommendation. A WARNING recommendation is now emitted when search failure is detected.
+- **NVIDIA SMI — exit code ignored**: Both `nvidia-smi` invocations stored `Status="SUCCESS"` unconditionally. GPU driver errors (driver not loaded, device unavailable) were silently recorded as passing. Exit code is now checked and mapped correctly.
+- **Tool output — clockres and du EULA**: Neither `clockres` nor `du` were in the `-accepteula` injection list. On systems without prior EULA acceptance cached in the registry, both tools wrote the full Sysinternals license text into their report sections instead of actual data. Added to the list alongside `psinfo`, `pslist`, `handle`, `autorunsc`.
+- **Tool output — autorunsc usage help instead of entries**: `autorunsc -a -c` caused autorunsc's parser to consume `-c` as the selection type argument for `-a` (character `c` = Codecs only), leaving no CSV flag — tool printed usage/help instead of autorun entries. Changed to `-c` only; default behavior is logon startup entries in CSV format.
+- **Tool output — NativeCommandError formatting in reports**: `2>&1` in `Invoke-Tool` causes PowerShell 5.1 to wrap native-process stderr lines as `NativeCommandError` objects. `Out-String` serializes these as multi-line blocks containing `CategoryInfo`, `FullyQualifiedErrorId`, and `At <path>:line` context. `Convert-ToolOutput` now skips lines matching these patterns.
+
+### 📈 Changed
+- GPU Tools Manager sub-menu renumbered: old Option 5 (Return to Main Menu) is now Option 6; new Option 5 is Download GPU Tools Automatically.
+- Startup banner replaces simple 4-line version header; `Clear-Host` precedes the banner to eliminate PowerShell startup noise.
 
 ---
 
