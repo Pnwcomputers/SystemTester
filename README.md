@@ -1,4 +1,4 @@
-# Portable Sysinternals Windows System Testing Utility
+# Portable Sysinternals Winodws System Testing Utility
 
 <p align="center">
   <img src="assets/systemtester.png" alt="Thumb-drive friendly, no-install Windows hardware health check toolkit powered by Sysinternals and PowerShell." width="600"/>
@@ -21,49 +21,55 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
 * Quickly identifying performance bottlenecks.
 ---
  
-## What's New in v2.5
+## What's New in v2.6
  
-v2.5 focuses on fixing real-world network testing failures observed in the field, particularly on systems running VPN software (Mullvad, Tailscale, WireGuard) and environments with virtual adapters (VMware, Hyper-V). It also resolves a latency test crash that affected every system, and fixes report encoding that caused garbled output in Notepad and legacy viewers.
+v2.6 is a quality and reliability release. The network speed test engine has been fully rewritten around `curl.exe` to resolve systematic TLS failures on modern endpoints. GPU tool downloads now work reliably via a new PowerShell function that fixes a batch-file parser bug triggered by Windows delayed variable expansion. A PNWC branded startup banner has been added. Thirteen bugs have been corrected, including six recommendation engine false positives and three tool output cleaner failures discovered during live test validation.
+ 
+### New Features
+ 
+- **PNWC Startup Banner**: Branded ASCII art header with version, contact info, and system context painted on launch; uses `Clear-Host` first to eliminate PowerShell startup noise; pure 7-bit ASCII (no UTF-8 box characters that mangle on older console hosts)
+- **GPU Tool Auto-Download**: New `Invoke-GPUToolDownload` PS1 function handles MSI Afterburner and FurMark with a curl.exe → BITS → IWR cascade; batch launcher GPU Tools Manager now includes **Option 5** to trigger downloads directly without opening a browser
  
 ### Bug Fixes
  
 | # | Area | Issue | Impact |
 |---|------|--------|--------|
-| 1 | Network Latency | `$targetPort` was never defined: `Test-NetConnection` received `Port=0` and threw a validation error on every run | **Critical**: latency test always failed |
-| 2 | Network Latency | `PsPing` output regex was too strict: minor whitespace variations caused "Unable to parse" on valid results | Medium: latency stats silently dropped |
-| 3 | Network Speed | Single hardcoded Hetzner HTTPS URL failed under VPN/proxy TLS interception (e.g. Mullvad) | High: speed test failed on VPN-connected machines |
-| 4 | Network Speed | No fallback if the download URL failed | Medium: single point of failure |
-| 5 | Recommendations | VMware VMnet and VPN virtual adapters (Mullvad, Tailscale) were flagged as "slow physical NICs" at 100 Mbps | Low: false positive recommendation |
-| 6 | Reports | Report files written as UTF-8 with Unicode bullets (`•`) and arrows (`->`) rendered as mojibake (`â€¢ â†'`) in Notepad and legacy viewers | Medium: garbled report output |
-| 7 | Reports | Box-drawing characters (`└─`) in the menu display caused non-ASCII bytes in the script itself | Low: cosmetic |
-| 8 | Batch Launcher | `VERIFY` section exit-code branching silently swallowed function output | Low: misleading success messages |
-| 9 | Batch Launcher | Sysinternals download had no SSL bypass: same VPN TLS issue as PS1 | High: download failed on VPN machines |
+| 1 | Network Speed | All 3 test URLs failing: Cloudflare and OVH with TLS handshake errors; Hetzner hostname (`speed.hetzner.de`) retired — DNS resolution failed on all systems | **Critical**: speed test always failed |
+| 2 | Network Speed | `.NET ServicePointManager` SSL bypass cannot resolve TLS 1.3 handshake failures — the bypass callback fires too late in the stack | High: fundamental architectural limit of the previous approach |
+| 3 | Batch Launcher | `setlocal enabledelayedexpansion` consumed `!` characters in inline PowerShell strings before PowerShell received them, generating `Missing closing '}'` and missing Catch/Finally block parse errors | **Critical**: GPU tool downloads always failed |
+| 4 | WHEA Events | Level 4 informational events (including "WHEA-Logger started" fired on every Windows boot) triggered "Hardware errors detected" recommendation | High: false positive on every healthy system after a reboot |
+| 5 | Disk Performance | Multiline regex (`.*`) cannot cross newlines in PowerShell — Write/Read speeds stored on separate output lines were never matched | High: disk performance recommendations never fired on any system |
+| 6 | Recommendations | Battery check matched the string `"No battery (desktop)"` on desktop systems | Medium: phantom laptop battery alert on desktops |
+| 7 | Recommendations | 802.11n Wi-Fi adapters at 100 Mbps triggered "Upgrade to Gigabit Ethernet" recommendation | Medium: false positive on all wireless-connected clients |
+| 8 | SMART Detection | `"Unhealthy"` `HealthStatus` from `Get-PhysicalDisk` not included in the recommendations pattern | Medium: actively failing drives not flagged |
+| 9 | Windows Update | Two separate check blocks both fired `"ACTION: N update(s) pending"` for any `pendingCount > 0` | Low: doubled recommendations on most systems |
+| 10 | Windows Update | After removing the duplicate early check, 1–5 pending updates produced no recommendation at all | Low: silent gap in coverage for minor pending counts |
+| 11 | Tool Output | `clockres` and `du` not in the `-accepteula` list — full Sysinternals EULA text was written into the clock resolution and disk usage report sections instead of actual data | Medium: two report sections always empty/garbage |
+| 12 | Security Analysis | `autorunsc` argument `-a -c` caused autorunsc to consume `-c` as the type-selection character for `-a` (codecs only), leaving no CSV flag — tool printed usage/help text instead of autorun entries | Medium: autorun entries never captured |
+| 13 | Tool Output | `2>&1` stderr capture produced raw PowerShell `NativeCommandError` / `CategoryInfo` / `FullyQualifiedErrorId` formatting inside tool output sections | Low: error-object noise cluttering report output |
  
 ### What Changed Technically
  
-**`Test-NetworkLatency`**
-- Removed the undefined `$targetPort` variable entirely: ICMP ping does not require a port
-- Removed `-Port` and `-InformationLevel Detailed` from `Test-NetConnection` (both require a valid port number)
-- Made `PsPing` ICMP args use bare IP instead of `IP:Port` format
-- Widened PsPing regex to allow variable whitespace (`\s*` instead of literal spaces)
-- Added a debug "raw tail" output line when PsPing parsing fails, so failures are diagnosable
-**`Test-NetworkSpeed`**
-- Replaced single Hetzner URL with a 3-URL fallback chain: Cloudflare → Hetzner HTTP → OVH
-- Added `[Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }` before each attempt to bypass VPN/proxy MITM certificate interception, restored immediately after
-- Added minimum file size check (1000 bytes) so an error HTML page returned by a firewall isn't measured as a "successful" download
-**Recommendation Engine: NIC check**
-- Now iterates adapter lines individually rather than pattern-matching the whole output block
-- Skips lines matching: `VMware`, `VMnet`, `Virtual`, `vEthernet`, `Tailscale`, `Mullvad`, `WireGuard`, `Loopback`, `Hyper-V`, `VPN`, `TAP-Windows`, `OpenVPN`
-- Only physical adapters at 10/100 Mbps generate a recommendation
-**Report encoding**
-- All `•` replaced with `*`, all `->` were already ASCII but confirmed clean
-- `Out-File` changed from `-Encoding UTF8` to `-Encoding ASCII`
-- Removed Unicode box-drawing characters (`└─`) from the menu display strings
-- Script itself is now fully 7-bit ASCII: no encoding surprises in any viewer
-**Batch Launcher (`SystemTester.bat`)**
-- Added the same SSL bypass pattern to the Sysinternals Suite download block
-- Simplified VERIFY section: removed exit-code branching that produced misleading results
-- Removed stale reference to legacy `SystemTester_FIXED.ps1` filename from the error message
+**`Test-NetworkSpeed` (full rewrite)**
+- Three-method cascade: **curl.exe** (primary) → **BITS** (fallback) → **Invoke-WebRequest** (last resort)
+- curl.exe and BITS use WinHTTP/Schannel natively — completely unaffected by `.NET ServicePointManager` TLS limitations; both support TLS 1.3 out of the box
+- Replaced retired `speed.hetzner.de` with `speedtest.tele2.net/10MB.zip` in the fallback slot
+ 
+**`Invoke-GPUToolDownload` (new function)**
+- Accepts `-Tool` (`"MSIAfterburner"` or `"FurMark"`) and `-TargetDir` parameters via new `$DownloadGPUTool` / `$DownloadDir` script params
+- Batch launcher calls `-File "%SCRIPT_PS1%" -DownloadGPUTool "..." -DownloadDir "..."` — avoids all `!` delayed-expansion issues entirely
+ 
+**Recommendation Engine: False positive fixes**
+- WHEA: `Where-Object { $_.Level -le 3 }` — excludes Level 4 informational events (normal boot activity)
+- Disk perf: split single `Write.*Read` multiline regex into two separate `if (-match "Write:")` / `if (-match "Read:")` blocks
+- Battery: match narrowed from `"Battery"` to `"Battery: "` (colon + space) — only matches actual battery data lines
+- NIC exclusion: added `Wi-Fi|Wireless|WLAN` to the virtual/non-physical adapter exclusion pattern
+- Windows Update: consolidated into a single check block covering the full range: `>20` (WARNING), `>5` (INFO), `>0` (ACTION), `0` (GOOD)
+
+**`Convert-ToolOutput` cleaner: Output quality fixes**
+- Added `clockres` and `du` to the `-accepteula` injection list so clock resolution and disk usage sections show actual data instead of EULA text
+- Added `NativeCommandError|CategoryInfo|FullyQualifiedErrorId|RemoteException|At .*\.ps1:` to the per-line skip pattern to strip PowerShell error-object formatting from `2>&1` captures
+- Fixed `autorunsc` argument from `-a -c` to `-c`: `-a` was consuming `-c` as its selection character (codecs), leaving no CSV flag; default logon-entry CSV output now works correctly
 ---
  
 ## Key Capabilities
@@ -81,8 +87,8 @@ v2.5 focuses on fixing real-world network testing failures observed in the field
 * **Fully Portable**: runs from USB; no installation required
 * **Graceful Degradation**: missing tools detected and skipped automatically
 * **Robust Elevation Handling**: reliable admin detection (Windows Home compatible)
-* **Auto-Download Tools**: built-in Sysinternals Suite downloader via batch launcher
-* **Resilient Downloads**: Triple-redundant download engine (BITS > IWR > WebClient) for Sysinternals utilities.
+* **Auto-Download Tools**: built-in Sysinternals Suite and GPU tool downloader via batch launcher
+* **Resilient Downloads**: Triple-redundant download engine (curl.exe > BITS > IWR) for speed tests and GPU tool downloads — native TLS 1.3 via WinHTTP/Schannel.
 * **Windows Update Integration**: checks pending updates and service status
 * **Modern PowerShell**: uses CIM instances (not deprecated WMI) for better performance
 ---
@@ -94,7 +100,7 @@ v2.5 focuses on fixing real-world network testing failures observed in the field
 * **Permissions:** Administrator rights recommended (some tests require elevation)
 * **Internet**: Required for Option 5 (Sysinternals Download)
 * **Sysinternals Tools:** Auto-downloadable via launcher or manual installation
-  * *Note: v2.5 now supports TLS 1.3 for secure communication with Microsoft CDNs.*
+  * *Note: v2.6 uses curl.exe (WinHTTP/Schannel) as the primary download engine for native TLS 1.3 support on all systems.*
 * **GPU Tools (Optional):** NVIDIA drivers (nvidia-smi), AMD drivers, GPU-Z
 ---
  
@@ -178,15 +184,15 @@ For enhanced GPU testing:
 | 14 | Hardware Events | WHEA error logs (last 7 days) | Event Viewer |
 | 15 | Windows Update | Pending updates, service status | Windows Update COM API |
  
-### Network Testing (Option 7): v2.5 Changes
+### Network Testing (Option 7): v2.6 Changes
  
-The network test was the most heavily revised area in v2.5. Specific improvements:
+The speed test engine was fully rewritten in v2.6 after all three test URLs failed simultaneously:
  
-* **Speed test** now tries three servers in sequence (Cloudflare, Hetzner HTTP, OVH) and stops at the first success, rather than failing outright if the single Hetzner HTTPS URL is blocked or intercepted
-* **SSL certificate bypass** is applied per-attempt and restored immediately after, handling VPN and proxy setups that perform TLS interception (Mullvad, corporate proxies, etc.)
-* **Latency test** now runs without a port parameter, so the `Test-NetConnection` ICMP ping actually executes on every system instead of throwing a port validation error
-* **PsPing** parsing is more flexible: results are captured correctly across different PsPing output formats
-* **Adapter recommendations** no longer flag VMware, Hyper-V, Tailscale, Mullvad, or other virtual adapters as "slow physical NICs"
+* **Speed test method 1 — curl.exe**: Uses WinHTTP/Schannel directly; supports TLS 1.3 natively; completely unaffected by `.NET ServicePointManager` limitations that caused failures under Mullvad, WireGuard, and corporate TLS-inspection proxies
+* **Speed test method 2 — BITS**: Background Intelligent Transfer Service also uses WinHTTP; TLS 1.3 capable; activates if curl.exe is unavailable
+* **Speed test method 3 — Invoke-WebRequest**: .NET fallback with TLS workarounds; last resort only
+* **URL updated**: Retired `speed.hetzner.de` (DNS failure) replaced with `speedtest.tele2.net/10MB.zip`
+* **Adapter recommendations**: Wi-Fi, Wireless, and WLAN adapters added to the exclusion pattern — 802.11n at 100 Mbps no longer triggers "Upgrade to Gigabit Ethernet"
 ---
  
 ## Sample Output
@@ -194,7 +200,7 @@ The network test was the most heavily revised area in v2.5. Specific improvement
 ### Clean Summary Report
 ```
 =========================================
-  SYSTEM TEST REPORT v2.5
+  SYSTEM TEST REPORT v2.6
   CLEAN SUMMARY
 =========================================
 Date: 04/23/2026 14:30:22
@@ -284,9 +290,9 @@ The batch launcher (`SystemTester.bat`) provides:
 2. **Run ALL Tests Automatically**: Complete system scan with auto-report
 3. **Fix PowerShell Execution Policy**: Set CurrentUser to RemoteSigned
 4. **Verify Tool Integrity**: Check digital signatures and file sizes of Sysinternals tools
-5. **Download/Update Sysinternals Suite**: Auto-download from Microsoft (~35 MB); VPN-compatible in v2.5
-6. **GPU Testing Tools Manager**: Download and manage GPU testing tools
-7. **Help / Troubleshooting**: Comprehensive troubleshooting guide updated for v2.5
+5. **Download/Update Sysinternals Suite**: Auto-download from Microsoft (~35 MB); uses curl.exe for TLS 1.3 compatibility
+6. **GPU Testing Tools Manager**: Download and manage GPU testing tools (sub-menu includes Option 5: Download GPU Tools Automatically — MSI Afterburner and FurMark via curl.exe)
+7. **Help / Troubleshooting**: Comprehensive troubleshooting guide
 8. **Exit**
 ---
  
@@ -350,6 +356,23 @@ The `Reports\` folder is created automatically the first time a report is genera
 ---
  
 ## Version History
+ 
+### v2.6: June 2026
+- Rewrote network speed test engine: curl.exe (primary, WinHTTP/Schannel) → BITS → Invoke-WebRequest cascade for native TLS 1.3 on all systems
+- Replaced retired `speed.hetzner.de` (DNS failure) with `speedtest.tele2.net/10MB.zip`
+- Added PNWC branded ASCII startup banner with Clear-Host, version header, and system context
+- Added `Invoke-GPUToolDownload` function: automated MSI Afterburner and FurMark downloads via curl.exe → BITS → IWR
+- Batch: GPU Tools Manager Option 5 now triggers automated tool downloads directly
+- Batch: Fixed GPU download parser errors caused by delayed expansion consuming `!` characters in inline PowerShell; moved all download logic to PS1 function, batch calls `-File` instead
+- Fixed WHEA false positive: Level 4 informational events (including normal boot events) no longer trigger hardware error alert; filter now requires Level ≤ 3
+- Fixed disk performance recommendations: split multiline `.*` regex into two separate match operations
+- Fixed battery false positive on desktops: narrowed match from `"Battery"` to `"Battery: "`
+- Fixed Wi-Fi NIC false positive: added `Wi-Fi|Wireless|WLAN` to adapter exclusion pattern
+- Fixed SMART detection: added `"Unhealthy"` to `HealthStatus` pattern match
+- Fixed Windows Update: consolidated duplicate check blocks; added branch for 1–5 pending updates
+- Fixed clockres and du EULA output: added both to `-accepteula` injection list
+- Fixed autorunsc producing usage text: corrected argument from `-a -c` to `-c` (default logon entries, CSV)
+- Fixed PowerShell error formatting leaking into report output: added NativeCommandError/CategoryInfo filter to output cleaner
  
 ### v2.5: April 2026
 - Fixed latency test crash: removed undefined `$targetPort` and broken `Test-NetConnection` args
@@ -510,4 +533,4 @@ MIT License: See [LICENSE](LICENSE) file for details.
  
 *Tested on Windows 10 (1909+) and Windows 11: Enterprise, Pro, Home & Server editions*
  
-**Last Updated:** AMay 2026 | **Version:** 2.5 | **Status:** Production Ready
+**Last Updated:** June 2026 | **Version:** 2.6 | **Status:** Production Ready
