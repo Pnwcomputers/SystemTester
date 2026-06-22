@@ -4,13 +4,13 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Production Ready Version - v2.21
+:: Production Ready Version - v2.6
 :: =====================================================
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
-set "DOWNLOAD_TIMEOUT_SEC=120"
-set "SCRIPT_VERSION=2.21"
+set "DOWNLOAD_TIMEOUT_SEC=180"
+set "SCRIPT_VERSION=2.6"
 if not defined ST_DEBUG set "ST_DEBUG=0"
 set "LAUNCH_LOG=%TEMP%\SystemTester_launcher.log"
 
@@ -83,7 +83,7 @@ echo.
 set "SCRIPT_DIR=%cd%"
 set "DRIVE_LETTER=%~d0"
 
-:: Locate PowerShell script (single supported name)
+:: Locate PowerShell script
 set "SCRIPT_PS1=%SCRIPT_DIR%\SystemTester.ps1"
 set "SCRIPT_PS1_NAME=SystemTester.ps1"
 
@@ -101,14 +101,12 @@ echo Path length: %PATH_LENGTH% characters
 echo.
 
 :: Verify PowerShell script exists
-if "%SCRIPT_PS1%"=="" (
-    echo [ERROR] PowerShell script not found in: %SCRIPT_DIR%
+if not exist "%SCRIPT_PS1%" (
+    echo [ERROR] PowerShell script not found: %SCRIPT_PS1%
     echo.
-    echo Expected one of the following files:
-    echo   - SystemTester_FIXED.ps1
-    echo   - SystemTester.ps1
+    echo Expected file: SystemTester.ps1
     echo.
-    echo If you renamed the script, restore one of the supported names.
+    echo Make sure SystemTester.ps1 is in the same folder as this batch file.
     echo.
     pause
     exit /b 1
@@ -116,7 +114,7 @@ if "%SCRIPT_PS1%"=="" (
 
 echo Using PowerShell script: %SCRIPT_PS1_NAME%
 if "%ST_DEBUG%"=="1" (
-    echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" ^(exists: ^<^%SCRIPT_PS1%^^?^) >> "%LAUNCH_LOG%"
+    echo [%DATE% %TIME%] Using PS1: "%SCRIPT_PS1%" >> "%LAUNCH_LOG%"
 )
 echo.
 
@@ -248,20 +246,10 @@ echo of all Sysinternals tools in your installation.
 echo.
 pause
 echo.
-:: Call the PowerShell function for tool verification
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { . ""%SCRIPT_PS1%""; if (-not (Test-ToolVerification)) { exit 2 } else { exit 0 } } catch { Write-Error $_; exit 1 }"
-set "VERIFY_CODE=%errorlevel%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { . ""%SCRIPT_PS1%""; Test-ToolVerification } catch { Write-Error $_; exit 1 }"
 echo.
-if "%VERIFY_CODE%"=="0" (
-    echo Verification complete. All tools validated successfully.
-) else (
-    if "%VERIFY_CODE%"=="2" (
-        echo [WARNING] Verification completed with issues detected. Review output above.
-        echo         Use Menu Option 5 to re-download the Sysinternals Suite.
-    ) else (
-        echo [ERROR] Verification encountered an issue. Review output above.
-    )
-)
+echo Verification complete. Review output above.
+echo If issues were found, use Menu Option 5 to re-download.
 echo.
 pause
 goto MENU
@@ -276,7 +264,7 @@ set "SYSINT_DIR=%SCRIPT_DIR%\Sysinternals"
 set "ZIP_FILE=%SCRIPT_DIR%\SysinternalsSuite.zip"
 set "DOWNLOAD_URL=https://download.sysinternals.com/files/SysinternalsSuite.zip"
 
-echo This will download ~35MB from Microsoft.
+echo This will download ~170MB from Microsoft.
 echo Target: %SYSINT_DIR%
 echo.
 set /p "confirm=Proceed? (Y/N): "
@@ -284,11 +272,84 @@ if /i not "%confirm%"=="Y" goto MENU
 
 echo.
 echo Downloading...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue; $p = @{ Uri = '%DOWNLOAD_URL%'; OutFile = '%ZIP_FILE%' }; if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $p.UseBasicParsing = $true }; if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec')) { $p.TimeoutSec = %DOWNLOAD_TIMEOUT_SEC% }; Invoke-WebRequest @p; Write-Host 'Download complete' -ForegroundColor Green } catch { Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
+:: ============================================================================
+:: FIX v2.5: Root cause of v2.4 breakage (reported 2026-04-28):
+::   The line "[Net.ServicePointManager]::SecurityProtocol = [Net...]::Tls12"
+::   ASSIGNED (=) the protocol enum, which silently DROPPED TLS 1.3 from the
+::   set of negotiated protocols. Microsoft's continued TLS 1.2 deprecation
+::   work through Q1 2026 (Azure Storage TLS 1.2-min Feb 2026, ongoing CDN
+::   hardening) plus the Akamai endpoint behind download.sysinternals.com
+::   appears to have started preferring/requiring TLS 1.3 handshakes,
+::   producing "underlying connection was closed" errors that get reported
+::   to the user as a generic "check your internet" message.
+::
+:: Changes:
+::   1. Use -bor (bitwise OR) to ADD TLS 1.2/1.3 to whatever's already
+::      enabled instead of replacing the whole protocol mask.
+::   2. Try BITS first (Start-BitsTransfer) - HTTP/2 capable, resumable,
+::      uses the BITS service which handles modern protocols cleanly.
+::   3. Fall back to Invoke-WebRequest (matches v2.4 behavior).
+::   4. Final fallback: System.Net.WebClient with cert validation bypass
+::      for VPN/proxy TLS-inspection environments (Mullvad, Tailscale).
+::   5. Save and restore both SecurityProtocol and the cert callback so
+::      the script doesn't leave the PowerShell session in a weakened state.
+::   6. Each method reports specifically which one failed and which one
+::      worked, so future debugging is not a guessing game.
+:: ============================================================================
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$ProgressPreference='SilentlyContinue';" ^
+    "$url='%DOWNLOAD_URL%';" ^
+    "$out='%ZIP_FILE%';" ^
+    "$timeout=%DOWNLOAD_TIMEOUT_SEC%;" ^
+    "$origCallback=[Net.ServicePointManager]::ServerCertificateValidationCallback;" ^
+    "$origProtocol=[Net.ServicePointManager]::SecurityProtocol;" ^
+    "try {" ^
+    "  $proto=[Net.ServicePointManager]::SecurityProtocol;" ^
+    "  try { $proto = $proto -bor [Net.SecurityProtocolType]::Tls12 } catch {};" ^
+    "  try { $proto = $proto -bor [Net.SecurityProtocolType]::Tls13 } catch {};" ^
+    "  [Net.ServicePointManager]::SecurityProtocol = $proto;" ^
+    "  $ok=$false; $lastErr='(none)';" ^
+    "  if (-not $ok) {" ^
+    "    try {" ^
+    "      Import-Module BitsTransfer -ErrorAction Stop;" ^
+    "      Start-BitsTransfer -Source $url -Destination $out -ErrorAction Stop;" ^
+    "      if (Test-Path $out) { $ok=$true; Write-Host '  [Method: BITS]' -ForegroundColor DarkGray }" ^
+    "    } catch { $lastErr=$_.Exception.Message; Write-Host ('  BITS failed: ' + $lastErr) -ForegroundColor DarkYellow }" ^
+    "  }" ^
+    "  if (-not $ok) {" ^
+    "    try {" ^
+    "      $p=@{ Uri=$url; OutFile=$out; UseBasicParsing=$true; TimeoutSec=$timeout };" ^
+    "      Invoke-WebRequest @p -ErrorAction Stop;" ^
+    "      if (Test-Path $out) { $ok=$true; Write-Host '  [Method: Invoke-WebRequest]' -ForegroundColor DarkGray }" ^
+    "    } catch { $lastErr=$_.Exception.Message; Write-Host ('  Invoke-WebRequest failed: ' + $lastErr) -ForegroundColor DarkYellow }" ^
+    "  }" ^
+    "  if (-not $ok) {" ^
+    "    try {" ^
+    "      [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true };" ^
+    "      $wc=New-Object System.Net.WebClient;" ^
+    "      $wc.Headers.Add('User-Agent','Mozilla/5.0 SystemTester/2.5');" ^
+    "      $wc.DownloadFile($url,$out);" ^
+    "      $wc.Dispose();" ^
+    "      if (Test-Path $out) { $ok=$true; Write-Host '  [Method: WebClient + cert bypass]' -ForegroundColor DarkGray }" ^
+    "    } catch { $lastErr=$_.Exception.Message; Write-Host ('  WebClient failed: ' + $lastErr) -ForegroundColor DarkYellow }" ^
+    "  }" ^
+    "  if ($ok) {" ^
+    "    Write-Host 'Download complete' -ForegroundColor Green" ^
+    "  } else {" ^
+    "    Write-Host ('ERROR: All download methods failed. Last error: ' + $lastErr) -ForegroundColor Red;" ^
+    "    exit 1" ^
+    "  }" ^
+    "} finally {" ^
+    "  [Net.ServicePointManager]::ServerCertificateValidationCallback = $origCallback;" ^
+    "  [Net.ServicePointManager]::SecurityProtocol = $origProtocol;" ^
+    "}"
 
 if errorlevel 1 (
     echo.
-    echo Download failed. Check internet connection.
+    echo Download failed via all methods ^(BITS, Invoke-WebRequest, WebClient^).
+    echo If you are on a VPN with TLS inspection, try disconnecting it and retrying.
+    echo Manual fallback: %DOWNLOAD_URL%
+    echo                  Extract to: %SYSINT_DIR%
     if exist "%ZIP_FILE%" del "%ZIP_FILE%" 2>nul
     pause
     goto MENU
@@ -351,9 +412,10 @@ echo --------------------------------------------------------
 echo.
 echo 1. GPU-Z (TechPowerUp) - Detailed GPU monitoring
 echo 2. Check NVIDIA Drivers/Tools
-echo 3. Check AMD Drivers/Tools  
-echo 4. Download Recommendations
-echo 5. Return to Main Menu
+echo 3. Check AMD Drivers/Tools
+echo 4. Download Recommendations (URLs)
+echo 5. Download GPU Tools Automatically
+echo 6. Return to Main Menu
 echo.
 echo --------------------------------------------------------
 echo INSTALLED TOOLS:
@@ -393,7 +455,8 @@ if "%gpu_choice%"=="1" goto GPU_TOOLS_GPUZ
 if "%gpu_choice%"=="2" goto GPU_TOOLS_NVIDIA
 if "%gpu_choice%"=="3" goto GPU_TOOLS_AMD
 if "%gpu_choice%"=="4" goto GPU_TOOLS_RECOMMEND
-if "%gpu_choice%"=="5" goto MENU
+if "%gpu_choice%"=="5" goto GPU_TOOLS_DOWNLOAD
+if "%gpu_choice%"=="6" goto MENU
 
 echo Invalid choice.
 timeout /t 1 >nul
@@ -633,19 +696,176 @@ echo.
 pause
 goto GPU_TOOLS
 
+:GPU_TOOLS_DOWNLOAD
+cls
+echo ========================================================
+echo          GPU TOOLS - AUTO DOWNLOAD MANAGER
+echo ========================================================
+echo.
+echo Tools Directory: %GPU_TOOLS_DIR%
+echo.
+
+:: Ensure Tools directory exists
+if not exist "%GPU_TOOLS_DIR%" (
+    mkdir "%GPU_TOOLS_DIR%" 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Cannot create Tools directory: %GPU_TOOLS_DIR%
+        pause
+        goto GPU_TOOLS
+    )
+)
+
+echo TOOL STATUS:
+echo --------------------------------------------------------
+:: GPU-Z
+if exist "%GPU_TOOLS_DIR%\GPU-Z.exe" (
+    for %%A in ("%GPU_TOOLS_DIR%\GPU-Z.exe") do (
+        if %%~zA LSS 500000 (echo [!] GPU-Z.exe - Incomplete ^(%%~zA bytes^)) else (echo [OK] GPU-Z.exe - Installed ^(%%~zA bytes^))
+    )
+) else (echo [ ] GPU-Z.exe          - Not installed)
+
+:: HWiNFO64
+if exist "%GPU_TOOLS_DIR%\HWiNFO64.exe" (
+    for %%A in ("%GPU_TOOLS_DIR%\HWiNFO64.exe") do echo [OK] HWiNFO64.exe       - Installed ^(%%~zA bytes^)
+) else (echo [ ] HWiNFO64.exe       - Not installed)
+
+:: MSI Afterburner
+if exist "%GPU_TOOLS_DIR%\MSIAfterburnerSetup.zip" (
+    for %%A in ("%GPU_TOOLS_DIR%\MSIAfterburnerSetup.zip") do echo [OK] MSI Afterburner     - Downloaded ^(%%~zA bytes^)
+) else (echo [ ] MSI Afterburner     - Not downloaded)
+
+:: FurMark
+if exist "%GPU_TOOLS_DIR%\FurMark_Setup.exe" (
+    for %%A in ("%GPU_TOOLS_DIR%\FurMark_Setup.exe") do echo [OK] FurMark_Setup.exe  - Installed ^(%%~zA bytes^)
+) else (echo [ ] FurMark_Setup.exe  - Not installed)
+
+echo.
+echo --------------------------------------------------------
+echo DOWNLOAD OPTIONS:
+echo --------------------------------------------------------
+echo.
+echo 1. GPU-Z         - Open browser (site requires manual download)
+echo 2. HWiNFO64      - Open browser (site requires manual download)
+echo 3. MSI Afterburner - Auto-download from MSI servers
+echo 4. FurMark         - Auto-download from Geeks3D
+echo 5. Open all browser downloads at once
+echo 6. Back to GPU Tools Menu
+echo.
+echo Note: Auto-download tries curl.exe, BITS, then Invoke-WebRequest.
+echo --------------------------------------------------------
+echo.
+set /p "dl_choice=Choose (1-6): "
+
+if "%dl_choice%"=="1" goto GPU_DL_GPUZ_BROWSER
+if "%dl_choice%"=="2" goto GPU_DL_HWINFO_BROWSER
+if "%dl_choice%"=="3" goto GPU_DL_AFTERBURNER
+if "%dl_choice%"=="4" goto GPU_DL_FURMARK
+if "%dl_choice%"=="5" goto GPU_DL_ALL_BROWSER
+if "%dl_choice%"=="6" goto GPU_TOOLS
+
+echo Invalid choice.
+timeout /t 1 >nul
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_GPUZ_BROWSER
+echo.
+echo Opening GPU-Z download page...
+start "" "https://www.techpowerup.com/gpuz/"
+echo.
+echo Save the file as: %GPU_TOOLS_DIR%\GPU-Z.exe
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_HWINFO_BROWSER
+echo.
+echo Opening HWiNFO64 download page...
+start "" "https://www.hwinfo.com/download/"
+echo.
+echo Save HWiNFO64.exe to: %GPU_TOOLS_DIR%\HWiNFO64.exe
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_ALL_BROWSER
+echo.
+echo Opening all GPU tool download pages...
+start "" "https://www.techpowerup.com/gpuz/"
+timeout /t 1 >nul
+start "" "https://www.hwinfo.com/download/"
+timeout /t 1 >nul
+start "" "https://www.msi.com/Landing/afterburner"
+timeout /t 1 >nul
+start "" "https://geeks3d.com/furmark/"
+echo.
+echo All pages opened. Save tools to: %GPU_TOOLS_DIR%\
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_AFTERBURNER
+echo.
+echo ========================================================
+echo          DOWNLOADING MSI AFTERBURNER
+echo ========================================================
+echo.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -DownloadGPUTool "MSIAfterburner" -DownloadDir "%GPU_TOOLS_DIR%"
+if errorlevel 1 (
+    echo.
+    echo Auto-download failed. Opening MSI download page instead...
+    timeout /t 2 >nul
+    start "" "https://www.msi.com/Landing/afterburner"
+)
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
+:GPU_DL_FURMARK
+echo.
+echo ========================================================
+echo            DOWNLOADING FURMARK
+echo ========================================================
+echo.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PS1%" -DownloadGPUTool "FurMark" -DownloadDir "%GPU_TOOLS_DIR%"
+if errorlevel 1 (
+    echo.
+    echo Auto-download failed. Opening FurMark download page instead...
+    timeout /t 2 >nul
+    start "" "https://geeks3d.com/furmark/"
+)
+echo.
+pause
+goto GPU_TOOLS_DOWNLOAD
+
 :HELP
 cls
 echo ========================================================
 echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo NEW IN v2.21:
-echo   - Tool integrity verification (digital signatures)
-echo   - Dual report system (Clean + Detailed)
-echo   - Fixed memory usage calculation bug
-echo   - Launcher awareness detection
-echo   - Enhanced GPU testing with vendor-specific tools
-echo   - GPU Tools Manager (Menu Option 6)
+echo NEW IN v2.6:
+echo   - Fixed speed test: curl.exe ^(WinHTTP/TLS1.3^) now tried first
+echo   - Fixed speed test: BITS added as second method before .NET IWR
+echo   - Fixed speed test: Hetzner URL replaced ^(DNS no longer resolves^)
+echo   - Added GPU Tools Download Manager ^(Menu 6 ^> Option 5^)
+echo     Auto-downloads MSI Afterburner and FurMark; browser for GPU-Z/HWiNFO
+echo.
+echo PREVIOUS (v2.5):
+echo   - Fixed Sysinternals download failure (post 2026-04-28)
+echo   - Root cause: TLS protocol assignment dropped TLS 1.3 support
+echo   - Now uses BITS first, falls back to IWR, then WebClient
+echo   - Properly preserves and restores SecurityProtocol state
+echo   - Updated download size estimate (~170MB, was ~35MB)
+echo   - Increased download timeout to 180s for larger payload
+echo.
+echo PREVIOUS (v2.4):
+echo   - Fixed Test-NetConnection port=0 error (latency test)
+echo   - Fixed SSL/TLS download failure under VPN/proxy (Mullvad, Tailscale)
+echo   - Multiple fallback URLs for internet speed test
+echo   - Fixed PsPing latency parsing (flexible regex)
+echo   - Virtual/VPN adapters no longer flagged as slow NICs
+echo   - Report files now use ASCII encoding (no more garbled bullets)
+echo   - Removed stale legacy script name reference
 echo.
 echo --------------------------------------------------------
 echo COMMON ISSUES:
@@ -661,14 +881,20 @@ echo 3. TOOLS MAY BE CORRUPTED
 echo    Solution: Use Menu Option 4 to verify integrity
 echo              Then Option 5 to re-download if needed
 echo.
-echo 4. DOWNLOAD FAILS
-echo    Causes: Firewall, proxy, no internet
-echo    Solution: Manual download from:
+echo 4. DOWNLOAD FAILS (SSL/TLS / connection closed)
+echo    Cause: Forced TLS 1.2-only (v2.4) dropped TLS 1.3 support after
+echo    Microsoft/Akamai endpoint hardening around April 2026.
+echo    v2.5 fix: tries BITS, then Invoke-WebRequest, then WebClient,
+echo    with TLS 1.2 + 1.3 negotiated additively.
+echo    Manual fallback:
 echo    https://download.sysinternals.com/files/SysinternalsSuite.zip
 echo    Extract to: %SCRIPT_DIR%\Sysinternals\
 echo.
-echo 5. MEMORY SHOWS 100%% (but Task Manager shows less)
-echo    This was a bug in v2.08 - FIXED in v2.21
+echo 5. NETWORK SPEED TEST FAILS
+echo    Cause: TLS 1.3 endpoint + .NET WebRequest incompatibility, or VPN.
+echo    v2.6 fix: tries curl.exe ^(WinHTTP/TLS1.3^) first, then BITS, then .NET IWR.
+echo    Hetzner URL replaced with Tele2 ^(Hetzner hostname no longer resolves^).
+echo    If still failing: disconnect VPN and retry, or check firewall/proxy.
 echo.
 echo 6. TESTS TAKE TOO LONG
 echo    Expected durations:
@@ -704,7 +930,10 @@ echo GPU TESTING:
 echo   Enhanced multi-GPU support
 echo   NVIDIA-SMI integration
 echo   AMD driver detection
-echo   GPU-Z download assistant
+echo   GPU Tools Download Manager ^(Option 6 ^> Option 5^)
+echo     - MSI Afterburner: auto-download ^(curl/BITS/IWR^)
+echo     - FurMark: auto-download ^(curl/BITS/IWR^)
+echo     - GPU-Z, HWiNFO64: browser download ^(site restrictions^)
 echo.
 echo ADMIN DETECTION:
 echo   Auto-elevates on startup
@@ -724,7 +953,7 @@ echo Thank you for using PNW Computers' Portable Sysinternals System Tester!
 echo                    Version %SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo Reports saved in: %SCRIPT_DIR%
+echo Reports saved in: %SCRIPT_DIR%\Reports\
 echo   - SystemTest_Clean_*.txt (summary)
 echo   - SystemTest_Detailed_*.txt (full output)
 echo   - energy-report.html (if power test ran)

@@ -1,11 +1,15 @@
 # Portable Sysinternals System Tester
 # Created by Pacific Northwest Computers - 2025
-# Complete Production Version - v2.21
+# Complete Production Version - v2.6
 
-param([switch]$AutoRun)
+param(
+    [switch]$AutoRun,
+    [string]$DownloadGPUTool = "",   # e.g. "MSIAfterburner" or "FurMark" - called from bat
+    [string]$DownloadDir = ""        # target directory for the downloaded file
+)
 
 # Constants
-$script:VERSION = "2.21"
+$script:VERSION = "2.6"
 $script:DXDIAG_TIMEOUT = 45
 $script:ENERGY_DURATION = 15
 $script:CPU_TEST_SECONDS = 10
@@ -22,18 +26,47 @@ $script:TestResults = @()
 $script:IsAdmin = $false
 $script:LaunchedViaBatch = $false
 
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "  SYSINTERNALS TESTER v$script:VERSION" -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "Running from: $DriveLetter" -ForegroundColor Cyan
+# ── Startup Banner ───────────────────────────────────────────────────────────
+# Pure-ASCII art — no UTF-8 box-drawing chars. Safe on PS 5.1 regardless of
+# console codepage; some Windows console hosts ignore chcp 65001 and decode
+# output as cp1252, producing mojibake with box-drawing characters.
+# Skipped entirely when invoked in download-only mode (-DownloadGPUTool).
+if (-not $DownloadGPUTool) {
+try { $host.UI.RawUI.WindowTitle = "PNWC System Tester v$script:VERSION" } catch {}
+Clear-Host
+Write-Host ""
+Write-Host "  ######   ##  ##   ##    ##   ######" -ForegroundColor Cyan
+Write-Host "  ##  ##   ### ##   ##    ##   ##    " -ForegroundColor Cyan
+Write-Host "  ######   ######   ## ## ##   ##    " -ForegroundColor Cyan
+Write-Host "  ##       ## ###   ########   ##    " -ForegroundColor Cyan
+Write-Host "  ##       ##  ##   ##    ##   ######" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Pacific Northwest Computers" -ForegroundColor White
+Write-Host "  Portable System Diagnostic Toolkit" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host ("=" * 70) -ForegroundColor DarkCyan
+Write-Host "   PNWC System Tester v$script:VERSION -- Powered by Sysinternals Suite      " -ForegroundColor Cyan
+Write-Host "   Pacific Northwest Computers  |  jon@pnwcomputers.com              " -ForegroundColor Gray
+Write-Host "   CPU / RAM / Disk / GPU / Network / Security / OS Health           " -ForegroundColor DarkGray
+Write-Host ("=" * 70) -ForegroundColor DarkCyan
+Write-Host ""
+Write-Host "  Started  : $(Get-Date -Format 'dddd MMMM dd yyyy  HH:mm:ss')" -ForegroundColor Gray
+Write-Host "  Computer : $env:COMPUTERNAME" -ForegroundColor Gray
+Write-Host "  Drive    : $DriveLetter" -ForegroundColor Gray
+Write-Host ""
+} # end banner block
 
 # Detect if launched via batch file
+# FIX v2.5: .Parent property only exists on Process objects in PowerShell 6+ (Core).
+#           Windows PowerShell 5.1 has no such property - silently returned $null,
+#           making batch detection always fail. Use Win32_Process.ParentProcessId
+#           which works on every supported PowerShell version.
 function Test-LauncherAwareness {
     try {
-        $parentPID = (Get-Process -Id $PID).Parent.Id
-        if ($parentPID) {
-            $parentProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$parentPID" -ErrorAction Stop
-            if ($parentProcess.Name -eq "cmd.exe") {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop
+        if ($proc -and $proc.ParentProcessId) {
+            $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ParentProcessId)" -ErrorAction Stop
+            if ($parent -and $parent.Name -eq "cmd.exe") {
                 $script:LaunchedViaBatch = $true
                 Write-Host "Launcher: Batch file detected" -ForegroundColor DarkGray
                 return $true
@@ -446,33 +479,85 @@ function Test-Storage {
         Invoke-Tool -ToolName "du" -ArgumentList "-l 2 C:\" -Description "Disk usage C:"
 
     # Disk performance test
-    Write-Host "Running disk test..." -ForegroundColor Yellow
+    # FIX v2.5 Issue #6: Original used Out-File -Append + Get-Content -Raw which
+    # measures filesystem cache, not disk. WriteThrough+FlushFileBuffers forces
+    # actual disk writes; FileStream.NoBuffering would also bypass the read cache
+    # but requires sector-aligned buffers. We instead read with FILE_FLAG_SEQUENTIAL_SCAN
+    # and a fresh handle after closing the writer, which causes Windows to re-read
+    # from disk for sufficiently large files. 64MB payload exceeds typical L3 caches
+    # but stays small enough to keep the test under a few seconds on slow drives.
+    Write-Host "Running disk test (64MB write-through)..." -ForegroundColor Yellow
     try {
         $testFile = Join-Path $env:TEMP "disktest_$([guid]::NewGuid().ToString('N')).tmp"
-        $testData = "0" * 1024 * 1024
+        $blockSize = 1MB
+        $blockCount = 64
+        $totalBytes = $blockSize * $blockCount
+        $buffer = New-Object byte[] $blockSize
+        # Fill with non-zero data so compression-aware filesystems can't elide writes
+        $rng = New-Object System.Random
+        $rng.NextBytes($buffer)
 
+        # WRITE: FileStream with WriteThrough flag forces writes past OS cache to disk
         $writeStart = Get-Date
-        for ($i=0; $i -lt 10; $i++) {
-            $testData | Out-File -FilePath $testFile -Append -Encoding ASCII -ErrorAction Stop
+        $fsWrite = [System.IO.FileStream]::new(
+            $testFile,
+            [System.IO.FileMode]::Create,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None,
+            $blockSize,
+            [System.IO.FileOptions]::WriteThrough
+        )
+        try {
+            for ($i = 0; $i -lt $blockCount; $i++) {
+                $fsWrite.Write($buffer, 0, $blockSize)
+            }
+            $fsWrite.Flush($true)  # Flush to disk, not just to OS
+        } finally {
+            $fsWrite.Dispose()
         }
         $writeTime = ((Get-Date) - $writeStart).TotalMilliseconds
 
+        # READ: Use SequentialScan flag for predictable sequential read pattern
         $readStart = Get-Date
-        $null = Get-Content $testFile -Raw -ErrorAction Stop
+        $fsRead = [System.IO.FileStream]::new(
+            $testFile,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read,
+            $blockSize,
+            [System.IO.FileOptions]::SequentialScan
+        )
+        try {
+            $readBuffer = New-Object byte[] $blockSize
+            $bytesRead = 0
+            do {
+                $bytesRead = $fsRead.Read($readBuffer, 0, $blockSize)
+            } while ($bytesRead -gt 0)
+        } finally {
+            $fsRead.Dispose()
+        }
         $readTime = ((Get-Date) - $readStart).TotalMilliseconds
 
-        Remove-Item $testFile -ErrorAction Stop
+        Remove-Item $testFile -ErrorAction SilentlyContinue
 
-        $writeMBps = if ($writeTime -gt 0) { [math]::Round(10/($writeTime/1000),2) } else { 0 }
-        $readMBps = if ($readTime -gt 0) { [math]::Round(10/($readTime/1000),2) } else { 0 }
+        $totalMB = $totalBytes / 1MB
+        $writeMBps = if ($writeTime -gt 0) { [math]::Round($totalMB / ($writeTime/1000), 2) } else { 0 }
+        $readMBps  = if ($readTime  -gt 0) { [math]::Round($totalMB / ($readTime /1000), 2) } else { 0 }
 
         $script:TestResults += @{
-            Tool="Disk-Performance"; Description="Disk performance (10MB)"
-            Status="SUCCESS"; Output="Write: $writeMBps MB/s`nRead: $readMBps MB/s"; Duration=($writeTime+$readTime)
+            Tool="Disk-Performance"; Description="Disk performance ($([int]$totalMB)MB sequential, write-through)"
+            Status="SUCCESS"
+            Output="Test Size: $([int]$totalMB) MB`nWrite: $writeMBps MB/s`nRead: $readMBps MB/s`nNote: Write-through bypasses OS cache; read may be partially cached"
+            Duration=($writeTime+$readTime)
         }
         Write-Host "Disk: Write $writeMBps MB/s, Read $readMBps MB/s" -ForegroundColor Green
     } catch {
-        Write-Host "Disk test failed" -ForegroundColor Yellow
+        Write-Host "Disk test failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        if ($testFile -and (Test-Path $testFile)) { Remove-Item $testFile -ErrorAction SilentlyContinue }
+        $script:TestResults += @{
+            Tool="Disk-Performance"; Description="Disk performance test"
+            Status="FAILED"; Output="Disk test failed: $($_.Exception.Message)"; Duration=0
+        }
     }
 }
 
@@ -514,7 +599,7 @@ function Test-NetworkSpeed {
     $status = "SUCCESS"
     $durationMs = 0
 
-    # Gather link speed information for active adapters
+    # Gather link speed for active adapters
     try {
         $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq "Up" }
         if ($adapters) {
@@ -530,41 +615,156 @@ function Test-NetworkSpeed {
         $outputLines += "Active Link Speeds: Unable to query adapters ($($_.Exception.Message))"
     }
 
-    # Perform an outbound download test to estimate internet throughput
-    $tempFile = $null
-    try {
-        $testUrl = "https://speed.hetzner.de/10MB.bin"
-        $tempFile = [System.IO.Path]::GetTempFileName()
-        Write-Host "Running internet download test (~10MB)..." -ForegroundColor Yellow
-        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        # Use compatible parameters across PowerShell versions
-        $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
-        $iwParams = @{ Uri = $testUrl; OutFile = $tempFile }
-        if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $iwParams.UseBasicParsing = $true }
-        if ($iwc -and $iwc.Parameters.ContainsKey('TimeoutSec')) { $iwParams.TimeoutSec = 120 }
-        Invoke-WebRequest @iwParams | Out-Null
-        $stopwatch.Stop()
+    # Hetzner removed: DNS no longer resolves (hostname retired).
+    # Tele2 added as the HTTP fallback - reliable public speed test server.
+    $testUrls = @(
+        "https://speed.cloudflare.com/__down?bytes=10000000"   # Cloudflare CDN
+        "https://speedtest.tele2.net/10MB.zip"                  # Tele2 (HTTP+HTTPS both work)
+        "https://proof.ovh.net/files/10Mb.dat"                  # OVH
+    )
 
-        $fileInfo = Get-Item $tempFile
-        $sizeBytes = [double]$fileInfo.Length
-        $duration = [math]::Max($stopwatch.Elapsed.TotalSeconds, 0.001)
-        $sizeMB = [math]::Round($sizeBytes / 1MB, 2)
-        $mbps = [math]::Round((($sizeBytes * 8) / 1MB) / $duration, 2)
-        $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+    $tempFile    = $null
+    $downloadDone = $false
 
-        $outputLines += "Internet Download Test:"
-        $outputLines += "  URL: $testUrl"
-        $outputLines += "  File Size: $sizeMB MB"
-        $outputLines += "  Time: $([math]::Round($duration,2)) sec"
-        $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
-        $durationMs = [math]::Round($stopwatch.Elapsed.TotalMilliseconds)
-    } catch {
-        if ($status -ne "FAILED") { $status = "FAILED" }
-        $outputLines += "Internet Download Test: Failed - $($_.Exception.Message)"
-    } finally {
-        if ($tempFile -and (Test-Path $tempFile)) {
-            Remove-Item $tempFile -ErrorAction SilentlyContinue
+    # ── Method 1: curl.exe (Win10 1803+ / Win11 built-in) ────────────────────────────
+    # Uses WinHTTP/Schannel - supports TLS 1.3 natively, unaffected by .NET
+    # ServicePointManager, and handles VPN/proxy cert injection with --insecure.
+    # This is the primary fix for the "underlying connection was closed" failures
+    # seen with .NET WebRequest on some TLS 1.3-only endpoints.
+    $curlCmd = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curlCmd) {
+        foreach ($testUrl in $testUrls) {
+            if ($downloadDone) { break }
+            $tempFile = [System.IO.Path]::GetTempFileName()
+            try {
+                Write-Host "Trying download test: $testUrl" -ForegroundColor Yellow
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                # --insecure bypasses cert check for VPN/proxy MITM (Mullvad, Tailscale, etc.)
+                # --location follows HTTP redirects; --retry 0 avoids double-counting time
+                & curl.exe --silent --show-error --location --output $tempFile `
+                    --max-time 60 --retry 0 --insecure $testUrl 2>&1 | Out-Null
+                $sw.Stop()
+                if ($LASTEXITCODE -ne 0) { throw "curl exited $LASTEXITCODE" }
+
+                $sizeBytes = [double](Get-Item $tempFile -ErrorAction Stop).Length
+                if ($sizeBytes -lt 1MB) { throw "Response too small ($sizeBytes bytes) - likely error page" }
+
+                $duration = [math]::Max($sw.Elapsed.TotalSeconds, 0.001)
+                $sizeMB   = [math]::Round($sizeBytes / 1MB, 2)
+                $mbps     = [math]::Round(($sizeBytes * 8 / 1000000) / $duration, 2)
+                $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+
+                $outputLines += "Internet Download Test:"
+                $outputLines += "  URL: $testUrl"
+                $outputLines += "  File Size: $sizeMB MB"
+                $outputLines += "  Time: $([math]::Round($duration, 2)) sec"
+                $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
+                $durationMs   = [math]::Round($sw.Elapsed.TotalMilliseconds)
+                $downloadDone = $true
+                $status       = "SUCCESS"
+            } catch {
+                Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
+            } finally {
+                if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -ErrorAction SilentlyContinue }
+            }
         }
+    }
+
+    # ── Method 2: Start-BitsTransfer (BITS service, also WinHTTP, TLS 1.3 capable) ──
+    if (-not $downloadDone) {
+        foreach ($testUrl in $testUrls) {
+            if ($downloadDone) { break }
+            $tempFile = Join-Path $env:TEMP "speedtest_$([guid]::NewGuid().ToString('N')).tmp"
+            try {
+                Write-Host "Trying download test (BITS): $testUrl" -ForegroundColor Yellow
+                Import-Module BitsTransfer -ErrorAction Stop
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                Start-BitsTransfer -Source $testUrl -Destination $tempFile -TransferType Download -ErrorAction Stop
+                $sw.Stop()
+
+                $sizeBytes = [double](Get-Item $tempFile -ErrorAction Stop).Length
+                if ($sizeBytes -lt 1MB) { throw "Response too small ($sizeBytes bytes)" }
+
+                $duration = [math]::Max($sw.Elapsed.TotalSeconds, 0.001)
+                $sizeMB   = [math]::Round($sizeBytes / 1MB, 2)
+                $mbps     = [math]::Round(($sizeBytes * 8 / 1000000) / $duration, 2)
+                $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+
+                $outputLines += "Internet Download Test:"
+                $outputLines += "  URL: $testUrl"
+                $outputLines += "  File Size: $sizeMB MB"
+                $outputLines += "  Time: $([math]::Round($duration, 2)) sec"
+                $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
+                $durationMs   = [math]::Round($sw.Elapsed.TotalMilliseconds)
+                $downloadDone = $true
+                $status       = "SUCCESS"
+            } catch {
+                Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
+            } finally {
+                if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -ErrorAction SilentlyContinue }
+            }
+        }
+    }
+
+    # ── Method 3: Invoke-WebRequest (.NET, last resort, with TLS + cert workarounds) ─
+    if (-not $downloadDone) {
+        foreach ($testUrl in $testUrls) {
+            if ($downloadDone) { break }
+            $prevCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+            $prevProtocol = [Net.ServicePointManager]::SecurityProtocol
+            $tempFile = $null
+            try {
+                $tempFile = [System.IO.Path]::GetTempFileName()
+                Write-Host "Trying download test (IWR): $testUrl" -ForegroundColor Yellow
+
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+                $tlsProto = $prevProtocol
+                try { $tlsProto = $tlsProto -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+                try { $tlsProto = $tlsProto -bor [Net.SecurityProtocolType]::Tls13 } catch {}
+                [Net.ServicePointManager]::SecurityProtocol = $tlsProto
+
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                $iwc = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
+                $iwParams = @{ Uri=$testUrl; OutFile=$tempFile; ErrorAction="Stop"; TimeoutSec=60 }
+                if ($iwc -and $iwc.Parameters.ContainsKey('UseBasicParsing')) { $iwParams.UseBasicParsing = $true }
+                if ($PSVersionTable.PSVersion.Major -ge 7 -and $iwc -and $iwc.Parameters.ContainsKey('SkipCertificateCheck')) {
+                    $iwParams.SkipCertificateCheck = $true
+                }
+                Invoke-WebRequest @iwParams | Out-Null
+                $sw.Stop()
+
+                $sizeBytes = [double](Get-Item $tempFile -ErrorAction Stop).Length
+                if ($sizeBytes -lt 1MB) { throw "Response too small ($sizeBytes bytes)" }
+
+                $duration = [math]::Max($sw.Elapsed.TotalSeconds, 0.001)
+                $sizeMB   = [math]::Round($sizeBytes / 1MB, 2)
+                $mbps     = [math]::Round(($sizeBytes * 8 / 1000000) / $duration, 2)
+                $mbPerSec = [math]::Round(($sizeBytes / 1MB) / $duration, 2)
+
+                $outputLines += "Internet Download Test:"
+                $outputLines += "  URL: $testUrl"
+                $outputLines += "  File Size: $sizeMB MB"
+                $outputLines += "  Time: $([math]::Round($duration, 2)) sec"
+                $outputLines += "  Throughput: $mbps Mbps ($mbPerSec MB/s)"
+                $durationMs   = [math]::Round($sw.Elapsed.TotalMilliseconds)
+                $downloadDone = $true
+                $status       = "SUCCESS"
+            } catch {
+                Write-Host "  URL failed: $($_.Exception.Message)" -ForegroundColor DarkGray
+                $outputLines += "Tried $testUrl - Failed: $($_.Exception.Message)"
+            } finally {
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCallback
+                [Net.ServicePointManager]::SecurityProtocol = $prevProtocol
+                if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -ErrorAction SilentlyContinue }
+            }
+        }
+    }
+
+    if (-not $downloadDone) {
+        $status = "FAILED"
+        $outputLines += "Internet Download Test: All methods failed"
+        $outputLines += "  Methods tried: curl.exe (WinHTTP), BITS, Invoke-WebRequest (.NET)"
+        $outputLines += "  Check firewall, VPN, or proxy settings"
     }
 
     $script:TestResults += @{
@@ -575,17 +775,21 @@ function Test-NetworkSpeed {
 
 function Test-NetworkLatency {
     Write-Host "`n=== Network Latency (Test-NetConnection & PsPing) ===" -ForegroundColor Green
+
     $targetHost = "8.8.8.8"
+    # FIX: Removed $targetPort - it was never defined, causing Test-NetConnection to pass Port=0
+    # which fails validation. ICMP ping does not require a port.
     $lines = @("Target: $targetHost")
     $status = "SUCCESS"
-    
-    # Built-in Test-NetConnection results (ICMP only)
+
+    # FIX: Removed -Port and -InformationLevel Detailed (requires a port >= 1)
+    # Plain Test-NetConnection does ICMP ping which is all we need here.
     try {
-        $tnc = Test-NetConnection -ComputerName $targetHost -InformationLevel Detailed
+        $tnc = Test-NetConnection -ComputerName $targetHost -WarningAction SilentlyContinue -ErrorAction Stop
         if ($tnc) {
             $lines += "Test-NetConnection:"
             $lines += "  Ping Succeeded: $($tnc.PingSucceeded)"
-            if ($tnc.PingReplyDetails) {
+            if ($tnc.PingSucceeded -and $tnc.PingReplyDetails) {
                 $lines += "  Ping RTT: $($tnc.PingReplyDetails.RoundtripTime) ms"
             }
         }
@@ -593,31 +797,38 @@ function Test-NetworkLatency {
         $status = "FAILED"
         $lines += "Test-NetConnection: Failed - $($_.Exception.Message)"
     }
-    
-    # Sysinternals PsPing results (ICMP only)
+
+    # Sysinternals PsPing - ICMP ping only (no port needed)
     try {
         $pspingPath = Join-Path $SysinternalsPath "psping.exe"
         if (Test-Path $pspingPath) {
+            # FIX: Removed "{0}:{1}" port format - use bare IP for ICMP mode
             $pspingArgs = @("-accepteula", "-n", "5", $targetHost)
             Write-Host "Running PsPing latency test..." -ForegroundColor Yellow
             $pspingOutput = & $pspingPath $pspingArgs 2>&1 | Out-String
             $lines += "PsPing Summary:"
+
             $average = $null
             $minimum = $null
             $maximum = $null
-            foreach ($line in $pspingOutput -split "`r?`n") {
-                if ($line -match "Minimum = ([\d\.]+)ms, Maximum = ([\d\.]+)ms, Average = ([\d\.]+)ms") {
+            foreach ($line in ($pspingOutput -split "`r?`n")) {
+                # FIX: Flexible regex - allows variable whitespace and spacing around '='
+                if ($line -match "Minimum\s*=\s*([\d\.]+)\s*ms[,\s]+Maximum\s*=\s*([\d\.]+)\s*ms[,\s]+Average\s*=\s*([\d\.]+)\s*ms") {
                     $minimum = [double]$matches[1]
                     $maximum = [double]$matches[2]
                     $average = [double]$matches[3]
                 }
             }
+
             if ($null -ne $average) {
                 $lines += "  Min: $minimum ms"
                 $lines += "  Max: $maximum ms"
                 $lines += "  Avg: $average ms"
             } else {
                 $lines += "  Unable to parse latency results"
+                # Debug: show raw tail so failures are diagnosable
+                $rawTail = ($pspingOutput -split "`r?`n" | Select-Object -Last 8) -join " | "
+                $lines += "  [Debug] PsPing raw tail: $rawTail"
             }
         } else {
             $lines += "PsPing Summary: psping.exe not found in Sysinternals folder"
@@ -626,7 +837,7 @@ function Test-NetworkLatency {
         $status = "FAILED"
         $lines += "PsPing Summary: Failed - $($_.Exception.Message)"
     }
-    
+
     $script:TestResults += @{
         Tool="Network-Latency"; Description="Connectivity latency tests"
         Status=$status; Output=($lines -join "`n"); Duration=0
@@ -649,11 +860,14 @@ function Test-OSHealth {
     try {
         $start = Get-Date
         $dism = (dism /Online /Cleanup-Image /ScanHealth) 2>&1 | Out-String
+        $dismExitCode = $LASTEXITCODE
         $sfc = (sfc /scannow) 2>&1 | Out-String
         $duration = ((Get-Date) - $start).TotalMilliseconds
 
         $summary = "DISM:`n" + (($dism -split "`n" | Where-Object {$_ -match "No component|repairable|error"} | Select-Object -First 3) -join "`n")
         $summary += "`n`nSFC:`n" + (($sfc -split "`n" | Where-Object {$_ -match "did not find|found corrupt|Protection"} | Select-Object -First 3) -join "`n")
+        # Embed exit code for language-neutral detection in the recommendations engine
+        $summary += "`nDISM-ExitCode: $dismExitCode"
 
         $script:TestResults += @{
             Tool="OS-Health"; Description="DISM+SFC integrity"
@@ -696,7 +910,11 @@ function Test-Trim {
         $q = (fsutil behavior query DisableDeleteNotify) 2>&1
         $map = @{}
         ($q -split "`n") | ForEach-Object {
+            # FIX v2.5 Issue #7: fsutil reports both NTFS and ReFS on modern Windows;
+            # original regex only captured NTFS, silently missing ReFS volumes
+            # (Storage Spaces, Dev Drive, etc.).
             if ($_ -match "NTFS DisableDeleteNotify\s*=\s*(\d)") { $map["NTFS"] = $matches[1] }
+            if ($_ -match "ReFS DisableDeleteNotify\s*=\s*(\d)") { $map["ReFS"] = $matches[1] }
         }
         $txt = $map.GetEnumerator() | ForEach-Object {
             $status = if ($_.Value -eq "0") { "Enabled" } else { "Disabled" }
@@ -745,6 +963,48 @@ function Test-NIC {
     }
 }
 
+# FIX v2.5: Win32_VideoController.AdapterRAM is uint32, capped at ~4.29GB. Any GPU
+#           with >4GB VRAM is misreported as 4GB (RTX 3060 Ti shows 4 instead of 8,
+#           RTX 2080 Ti shows 4 instead of 11). Read true value from driver registry
+#           key HardwareInformation.qwMemorySize (64-bit), with WMI fallback for iGPUs.
+function Get-AccurateVRAM {
+    param($VideoController)
+    try {
+        if ($VideoController.PNPDeviceID) {
+            # PNPDeviceID format: PCI\VEN_10DE&DEV_2484&SUBSYS_...&REV_A1\4&...
+            # We need the VEN_xxxx&DEV_xxxx portion for matching
+            $idMatch = [regex]::Match($VideoController.PNPDeviceID, 'VEN_[0-9A-F]+&DEV_[0-9A-F]+', 'IgnoreCase')
+            if ($idMatch.Success) {
+                $devicePattern = $idMatch.Value
+                $regBase = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+                if (Test-Path $regBase) {
+                    $subkeys = Get-ChildItem $regBase -ErrorAction SilentlyContinue |
+                               Where-Object { $_.PSChildName -match '^\d{4}$' }
+                    foreach ($sk in $subkeys) {
+                        $props = Get-ItemProperty $sk.PSPath -ErrorAction SilentlyContinue
+                        if ($props -and $props.MatchingDeviceId -and
+                            $props.MatchingDeviceId -match [regex]::Escape($devicePattern)) {
+                            $qword = $props.'HardwareInformation.qwMemorySize'
+                            if ($qword) {
+                                # REG_BINARY (byte[]) on some drivers; REG_QWORD (int64) on others
+                                $vramBytes = if ($qword -is [byte[]] -and $qword.Length -ge 8) {
+                                    [System.BitConverter]::ToInt64($qword, 0)
+                                } else {
+                                    try { [int64]$qword } catch { 0L }
+                                }
+                                if ($vramBytes -gt 0) { return $vramBytes }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch {}
+    # Fallback: WMI value (correct for iGPUs and small VRAM, truncated for >4GB dGPUs)
+    if ($VideoController.AdapterRAM) { return [int64]$VideoController.AdapterRAM }
+    return 0
+}
+
 # Test: GPU (Enhanced)
 function Test-GPU {
     Write-Host "`n=== GPU Testing (Enhanced) ===" -ForegroundColor Green
@@ -765,7 +1025,8 @@ function Test-GPU {
             $gpuInfo += "-" * 60
             $gpuInfo += "Name: $($gpu.Name)"
             $gpuInfo += "Status: $($gpu.Status)"
-            $gpuInfo += "Adapter RAM: $([math]::Round($gpu.AdapterRAM/1GB,2)) GB"
+            $accurateVRAM = Get-AccurateVRAM -VideoController $gpu
+            $gpuInfo += "Adapter RAM: $([math]::Round($accurateVRAM/1GB,2)) GB"
             $gpuInfo += "Driver Version: $($gpu.DriverVersion)"
             $gpuInfo += "Driver Date: $($gpu.DriverDate)"
             $gpuInfo += "Video Processor: $($gpu.VideoProcessor)"
@@ -1022,27 +1283,39 @@ function Test-GPUVendorSpecific {
     
     # Check for NVIDIA
     try {
-        $nvidiaSmi = "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
-        if (Test-Path $nvidiaSmi) {
-            Write-Host "NVIDIA GPU detected - running nvidia-smi..." -ForegroundColor Yellow
-            
+        # FIX v2.5: Modern NVIDIA drivers (Win10 1909+ / 2019+) install nvidia-smi
+        #           to C:\Windows\System32\ which is on PATH. Old NVSMI folder is
+        #           legacy and absent on most current installs. Try PATH first.
+        $nvidiaSmi = $null
+        $nvidiaSmiCmd = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+        if ($nvidiaSmiCmd) {
+            $nvidiaSmi = $nvidiaSmiCmd.Source
+        } elseif (Test-Path "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe") {
+            $nvidiaSmi = "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+        }
+
+        if ($nvidiaSmi) {
+            Write-Host "NVIDIA GPU detected - running nvidia-smi from $nvidiaSmi..." -ForegroundColor Yellow
+
             $nvidiaOutput = & $nvidiaSmi --query-gpu=name,driver_version,temperature.gpu,utilization.gpu,memory.total,memory.used,power.draw,clocks.current.graphics,clocks.current.memory --format=csv 2>&1 | Out-String
-            
+            $nvidiaSmiStatus = if ($LASTEXITCODE -eq 0) { "SUCCESS" } else { "FAILED" }
+
             $script:TestResults += @{
                 Tool="NVIDIA-SMI"; Description="NVIDIA GPU metrics"
-                Status="SUCCESS"; Output=$nvidiaOutput; Duration=500
+                Status=$nvidiaSmiStatus; Output=$nvidiaOutput; Duration=500
             }
-            
+
             Write-Host "NVIDIA metrics collected" -ForegroundColor Green
-            
+
             # Get more detailed info
             $detailedOutput = & $nvidiaSmi -q 2>&1 | Out-String
-            
+            $nvidiaDetailedStatus = if ($LASTEXITCODE -eq 0) { "SUCCESS" } else { "FAILED" }
+
             $script:TestResults += @{
                 Tool="NVIDIA-SMI-Detailed"; Description="NVIDIA detailed info"
-                Status="SUCCESS"; Output=$detailedOutput; Duration=500
+                Status=$nvidiaDetailedStatus; Output=$detailedOutput; Duration=500
             }
-            
+
         } else {
             Write-Host "NVIDIA GPU not detected or nvidia-smi not installed" -ForegroundColor DarkGray
             $script:TestResults += @{
@@ -1109,43 +1382,90 @@ function Test-GPUVendorSpecific {
 # Test: GPU Memory
 function Test-GPUMemory {
     Write-Host "`n=== GPU Memory Test ===" -ForegroundColor Green
-    
+
     try {
-        $gpus = Get-CimInstance Win32_VideoController
-        
+        $gpus = @(Get-CimInstance Win32_VideoController)
+        $gpuCount = $gpus.Count
+
+        # FIX v2.5.1: \GPU Process Memory(*) counters aggregate across ALL physical
+        # adapters by default. Iterating per-GPU caused both iterations to sum the
+        # SAME total then divide by each GPU's individual VRAM, producing impossible
+        # results like 298% utilization on the iGPU. Fix: sample once outside the
+        # loop, only attribute utilization to a single GPU when there's only one,
+        # and emit a separate system-wide total for multi-GPU systems.
+        $aggregatedDedicated = 0
+        $aggregatedShared    = 0
+        $activeProcesses     = 0
+        $countersAvailable   = $false
+        try {
+            $dedSamples = (Get-Counter -Counter "\GPU Process Memory(*)\Dedicated Usage" -ErrorAction Stop).CounterSamples
+            $shrSamples = (Get-Counter -Counter "\GPU Process Memory(*)\Shared Usage"    -ErrorAction SilentlyContinue).CounterSamples
+
+            $dedSum = ($dedSamples | Measure-Object -Property CookedValue -Sum).Sum
+            $shrSum = ($shrSamples | Measure-Object -Property CookedValue -Sum).Sum
+            if ($dedSum) { $aggregatedDedicated = [double]$dedSum }
+            if ($shrSum) { $aggregatedShared    = [double]$shrSum }
+            $activeProcesses = ($dedSamples | Where-Object { $_.CookedValue -gt 0 } | Measure-Object).Count
+            $countersAvailable = $true
+        } catch {
+            $countersAvailable = $false
+        }
+
         foreach ($gpu in $gpus) {
-            $totalRAM = [math]::Round($gpu.AdapterRAM / 1GB, 2)
-            
+            # FIX v2.5 Bug #3: Use registry-backed VRAM (handles >4GB cards correctly)
+            $totalBytes = Get-AccurateVRAM -VideoController $gpu
+            $totalRAM = [math]::Round($totalBytes / 1GB, 2)
+
             Write-Host "Testing $($gpu.Name) - $totalRAM GB VRAM" -ForegroundColor Yellow
-            
-            # Get current usage via performance counters (if available)
-            try {
-                $perfCounters = Get-Counter -Counter "\GPU Engine(*)\Running Time" -ErrorAction Stop
-                
-                $usage = @()
-                $usage += "GPU: $($gpu.Name)"
-                $usage += "Total VRAM: $totalRAM GB"
-                $usage += "`nActive GPU processes detected: $($perfCounters.CounterSamples.Count)"
-                
-                $script:TestResults += @{
-                    Tool="GPU-Memory-Test"; Description="GPU memory analysis"
-                    Status="SUCCESS"; Output=($usage -join "`n"); Duration=200
+
+            $usage = @()
+            $usage += "GPU: $($gpu.Name)"
+            $usage += "Total VRAM: $totalRAM GB"
+
+            if ($countersAvailable -and $gpuCount -eq 1) {
+                # Single GPU: attributing aggregate counters is accurate
+                $dedicatedMB = [math]::Round($aggregatedDedicated / 1MB, 1)
+                $sharedMB    = [math]::Round($aggregatedShared    / 1MB, 1)
+                $usage += "Dedicated VRAM In Use: $dedicatedMB MB"
+                $usage += "Shared Memory In Use: $sharedMB MB"
+                if ($totalBytes -gt 0 -and $aggregatedDedicated -gt 0) {
+                    $usagePct = [math]::Round(($aggregatedDedicated / $totalBytes) * 100, 1)
+                    $usage += "VRAM Utilization: $usagePct%"
                 }
-                
-                Write-Host "GPU memory test complete" -ForegroundColor Green
-            } catch {
-                # Fallback to basic info
-                $usage = @()
-                $usage += "GPU: $($gpu.Name)"
-                $usage += "Total VRAM: $totalRAM GB"
-                $usage += "Note: Performance counters not available for detailed usage"
-                
-                $script:TestResults += @{
-                    Tool="GPU-Memory-Test"; Description="GPU memory analysis"
-                    Status="SUCCESS"; Output=($usage -join "`n"); Duration=100
-                }
-                
-                Write-Host "GPU memory info collected (limited data)" -ForegroundColor Green
+                $usage += "Active GPU processes: $activeProcesses"
+            } elseif ($countersAvailable -and $gpuCount -gt 1) {
+                # Multi-GPU with counters: aggregate is available in the system-wide entry.
+                $usage += "Note: Multi-GPU system - per-adapter VRAM usage is not"
+                $usage += "      reliably reported by Windows performance counters."
+                $usage += "      See GPU-Memory-Total entry for system-wide totals."
+            } else {
+                $usage += "Note: GPU Process Memory counters unavailable - VRAM usage cannot be measured"
+            }
+
+            $script:TestResults += @{
+                Tool="GPU-Memory-Test"; Description="GPU memory analysis"
+                Status="SUCCESS"; Output=($usage -join "`n"); Duration=200
+            }
+            Write-Host "GPU memory info collected" -ForegroundColor Green
+        }
+
+        # On multi-GPU systems, emit one system-wide aggregate entry
+        if ($gpuCount -gt 1 -and $countersAvailable) {
+            $totalSystemVRAM = 0
+            foreach ($g in $gpus) { $totalSystemVRAM += (Get-AccurateVRAM -VideoController $g) }
+            $sysOut = @()
+            $sysOut += "System-wide aggregate (all GPUs combined):"
+            $sysOut += "Total VRAM Capacity: $([math]::Round($totalSystemVRAM/1GB,2)) GB"
+            $sysOut += "Dedicated VRAM In Use: $([math]::Round($aggregatedDedicated/1MB,1)) MB"
+            $sysOut += "Shared Memory In Use: $([math]::Round($aggregatedShared/1MB,1)) MB"
+            if ($totalSystemVRAM -gt 0 -and $aggregatedDedicated -gt 0) {
+                $pct = [math]::Round(($aggregatedDedicated / $totalSystemVRAM) * 100, 1)
+                $sysOut += "Aggregate VRAM Utilization: $pct%"
+            }
+            $sysOut += "Active GPU processes: $activeProcesses"
+            $script:TestResults += @{
+                Tool="GPU-Memory-Total"; Description="System-wide GPU memory (all adapters)"
+                Status="SUCCESS"; Output=($sysOut -join "`n"); Duration=50
             }
         }
     } catch {
@@ -1171,7 +1491,9 @@ function Test-Power {
         } catch { $lines += "No battery (desktop)" }
 
         if ($script:IsAdmin) {
-            $report = Join-Path $ScriptRoot "energy-report.html"
+            $reportsDir = Join-Path $ScriptRoot "Reports"
+            if (!(Test-Path $reportsDir)) { New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null }
+            $report = Join-Path $reportsDir "energy-report.html"
             Write-Host "Generating energy report ($script:ENERGY_DURATION sec)..." -ForegroundColor Yellow
             powercfg /energy /output $report /duration $script:ENERGY_DURATION 2>&1 | Out-Null
             if (Test-Path $report) {
@@ -1193,15 +1515,21 @@ function Test-Power {
 function Test-HardwareEvents {
     Write-Host "`n=== Hardware Events (WHEA) ===" -ForegroundColor Green
     try {
+        # Level filter: 1=Critical, 2=Error, 3=Warning, 4=Information, 5=Verbose.
+        # WHEA Event ID 1 ("WHEA-Logger operational") fires at Level 4 on every boot
+        # and is not a hardware fault. Without the Level filter every system that
+        # rebooted within the 7-day window would trigger "Hardware errors detected".
         $ev = Get-WinEvent -FilterHashtable @{
             LogName='System'
             ProviderName='Microsoft-Windows-WHEA-Logger'
             StartTime=(Get-Date).AddDays(-7)
-        } -ErrorAction SilentlyContinue | Select-Object -First 10
+        } -ErrorAction SilentlyContinue |
+            Where-Object { $_.Level -le 3 } |
+            Select-Object -First 10
 
         if ($ev) {
             $text = ($ev | ForEach-Object {
-                "[{0:yyyy-MM-dd}] ID {1}: {2}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName
+                "[{0:yyyy-MM-dd}] ID {1} ({2}): {3}" -f $_.TimeCreated,$_.Id,$_.LevelDisplayName,$_.Message.Split("`n")[0]
             }) -join "`n"
         } else {
             $text = "No WHEA errors in last 7 days (good)"
@@ -1226,10 +1554,16 @@ function Test-WindowsUpdate {
     try {
         $lines = @()
         try {
+            # FIX v2.5.1: Modern Windows trigger-starts wuauserv on demand; a
+            # "Stopped" Status is the normal idle state. Report both Status (for
+            # informational visibility) and StartType (for the actual problem
+            # signal). Recommendations engine now checks StartType, not Status.
             $svc = Get-Service -Name wuauserv -ErrorAction Stop
-            $lines += "Service: $($svc.Status)"
+            $lines += "Service Status: $($svc.Status)"
+            $lines += "Service StartType: $($svc.StartType)"
         } catch {
-            $lines += "Service: Unable to query"
+            $lines += "Service Status: Unable to query"
+            $lines += "Service StartType: Unable to query"
         }
 
         Write-Host "Checking for updates (may take 30-90 sec)..." -ForegroundColor Yellow
@@ -1286,19 +1620,32 @@ function Test-WindowsUpdate {
 function New-Report {
     Write-Host "`nGenerating reports..." -ForegroundColor Cyan
 
-    # Test write access
-    $testFile = Join-Path $ScriptRoot "writetest_$([guid]::NewGuid().ToString('N')).tmp"
+    # Ensure Reports subfolder exists
+    $ReportsDir = Join-Path $ScriptRoot "Reports"
+    if (!(Test-Path $ReportsDir)) {
+        try {
+            New-Item -ItemType Directory -Path $ReportsDir -Force | Out-Null
+            Write-Host "Created Reports folder: $ReportsDir" -ForegroundColor DarkGray
+        } catch {
+            Write-Host "ERROR: Cannot create Reports folder: $ReportsDir" -ForegroundColor Red
+            Write-Host "       $($_.Exception.Message)" -ForegroundColor Red
+            return
+        }
+    }
+
+    # Test write access to Reports folder
+    $testFile = Join-Path $ReportsDir "writetest_$([guid]::NewGuid().ToString('N')).tmp"
     try {
         "test" | Out-File -FilePath $testFile -ErrorAction Stop
         Remove-Item $testFile -ErrorAction Stop
     } catch {
-        Write-Host "ERROR: Cannot write to $ScriptRoot" -ForegroundColor Red
+        Write-Host "ERROR: Cannot write to Reports folder: $ReportsDir" -ForegroundColor Red
         return
     }
 
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $cleanPath = Join-Path $ScriptRoot "SystemTest_Clean_$timestamp.txt"
-    $detailedPath = Join-Path $ScriptRoot "SystemTest_Detailed_$timestamp.txt"
+    $cleanPath = Join-Path $ReportsDir "SystemTest_Clean_$timestamp.txt"
+    $detailedPath = Join-Path $ReportsDir "SystemTest_Detailed_$timestamp.txt"
 
     # Calculate stats
     $success = ($TestResults | Where-Object {$_.Status -eq "SUCCESS"}).Count
@@ -1399,47 +1746,53 @@ function New-Report {
     if ($ramInfo -and $ramInfo.Output -match "Usage: ([\d\.]+)%") {
         $usage = [float]$matches[1]
         if ($usage -gt 85) {
-            $recommendations += "• CRITICAL: High memory usage ($usage%)"
-            $recommendations += "  → Close unnecessary programs"
-            $recommendations += "  → Check for memory leaks in Task Manager"
-            $recommendations += "  → Consider adding more RAM (current usage indicates shortage)"
+            $recommendations += "* CRITICAL: High memory usage ($usage%)"
+            $recommendations += "  -> Close unnecessary programs"
+            $recommendations += "  -> Check for memory leaks in Task Manager"
+            $recommendations += "  -> Consider adding more RAM (current usage indicates shortage)"
         } elseif ($usage -gt 70) {
-            $recommendations += "• WARNING: Elevated memory usage ($usage%)"
-            $recommendations += "  → Monitor for memory-intensive applications"
-            $recommendations += "  → RAM upgrade recommended if usage stays consistently high"
+            $recommendations += "* WARNING: Elevated memory usage ($usage%)"
+            $recommendations += "  -> Monitor for memory-intensive applications"
+            $recommendations += "  -> RAM upgrade recommended if usage stays consistently high"
         } elseif ($usage -lt 30) {
-            $recommendations += "• GOOD: Low memory usage ($usage%) - plenty of RAM available"
+            $recommendations += "* GOOD: Low memory usage ($usage%) - plenty of RAM available"
         }
     }
 
     # === STORAGE HEALTH ===
     $smartInfo = $TestResults | Where-Object {$_.Tool -eq "Storage-SMART"}
     if ($smartInfo -and $smartInfo.Output -notmatch "not available") {
-        if ($smartInfo.Output -match "Warning|Caution|Failed|Degraded") {
-            $recommendations += "• CRITICAL: Drive health issue detected"
-            $recommendations += "  → BACKUP DATA IMMEDIATELY"
-            $recommendations += "  → Run manufacturer's diagnostic tool"
-            $recommendations += "  → Consider drive replacement"
+        # "Unhealthy" is the third standard Get-PhysicalDisk HealthStatus value (Healthy/Warning/Unhealthy).
+        # Without it a genuinely failing drive is silently missed.
+        if ($smartInfo.Output -match "Warning|Caution|Failed|Degraded|Unhealthy") {
+            $recommendations += "* CRITICAL: Drive health issue detected"
+            $recommendations += "  -> BACKUP DATA IMMEDIATELY"
+            $recommendations += "  -> Run manufacturer's diagnostic tool"
+            $recommendations += "  -> Consider drive replacement"
         }
     }
 
     # === STORAGE PERFORMANCE ===
-    if ($diskPerf -and $diskPerf.Output -match "Write: ([\d\.]+) MB/s.*Read: ([\d\.]+) MB/s") {
-        $writeSpeed = [float]$matches[1]
-        $readSpeed = [float]$matches[2]
-        
-        # HDD typical: 80-160 MB/s, SSD typical: 200-550 MB/s (SATA), NVMe: 1500+ MB/s
-        if ($writeSpeed -lt 50 -or $readSpeed -lt 50) {
-            $recommendations += "• WARNING: Very slow disk performance detected"
-            $recommendations += "  → Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
-            $recommendations += "  → Check for background processes (antivirus, Windows Update)"
-            $recommendations += "  → Run disk defragmentation (HDD only, not SSD)"
-            $recommendations += "  → Check disk health with manufacturer tools"
-            $recommendations += "  → Consider SSD upgrade for significant speed improvement"
-        } elseif ($writeSpeed -lt 100 -or $readSpeed -lt 100) {
-            $recommendations += "• INFO: Moderate disk performance (likely HDD)"
-            $recommendations += "  → Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
-            $recommendations += "  → Consider SSD upgrade for 3-5x speed improvement"
+    # Match Write and Read separately: the output stores them on different lines so
+    # a single regex using .* never matches (PowerShell . does not cross newlines).
+    if ($diskPerf) {
+        $writeSpeed = 0.0; $readSpeed = 0.0
+        if ($diskPerf.Output -match "Write: ([\d\.]+) MB/s") { $writeSpeed = [float]$matches[1] }
+        if ($diskPerf.Output -match "Read: ([\d\.]+) MB/s")  { $readSpeed  = [float]$matches[1] }
+        if ($writeSpeed -gt 0 -and $readSpeed -gt 0) {
+            # HDD typical: 80-160 MB/s  |  SATA SSD: 200-550 MB/s  |  NVMe: 1500+ MB/s
+            if ($writeSpeed -lt 50 -or $readSpeed -lt 50) {
+                $recommendations += "* WARNING: Very slow disk performance detected"
+                $recommendations += "  -> Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
+                $recommendations += "  -> Check for background processes (antivirus, Windows Update)"
+                $recommendations += "  -> Run disk defragmentation (HDD only, not SSD)"
+                $recommendations += "  -> Check disk health with manufacturer tools"
+                $recommendations += "  -> Consider SSD upgrade for significant speed improvement"
+            } elseif ($writeSpeed -lt 100 -or $readSpeed -lt 100) {
+                $recommendations += "* INFO: Moderate disk performance (likely HDD)"
+                $recommendations += "  -> Write: $writeSpeed MB/s, Read: $readSpeed MB/s"
+                $recommendations += "  -> Consider SSD upgrade for 3-5x speed improvement"
+            }
         }
     }
 
@@ -1447,27 +1800,18 @@ function New-Report {
     if ($netSpeed -and $netSpeed.Output -match "Throughput: ([\d\.]+) Mbps") {
         $throughputMbps = [float]$matches[1]
         if ($throughputMbps -lt 25) {
-            $recommendations += "• WARNING: Internet throughput appears slow ($throughputMbps Mbps)"
-            $recommendations += "  → Verify ISP plan and router performance"
-            $recommendations += "  → Re-test when fewer applications are consuming bandwidth"
+            $recommendations += "* WARNING: Internet throughput appears slow ($throughputMbps Mbps)"
+            $recommendations += "  -> Verify ISP plan and router performance"
+            $recommendations += "  -> Re-test when fewer applications are consuming bandwidth"
         }
     }
 
     if ($netLatency -and $netLatency.Output -match "Avg: ([\d\.]+) ms") {
         $avgLatency = [float]$matches[1]
         if ($avgLatency -gt 100) {
-            $recommendations += "• NOTICE: High network latency detected (Avg $avgLatency ms)"
-            $recommendations += "  → Check local network congestion"
-            $recommendations += "  → Contact ISP if latency persists"
-        }
-    }
-
-    if ($updateInfo -and $updateInfo.Output -match "Pending: (\d+)") {
-        $pendingUpdates = [int]$matches[1]
-        if ($pendingUpdates -gt 0) {
-            $recommendations += "• ACTION: $pendingUpdates Windows update(s) pending installation"
-            $recommendations += "  → Install updates via Settings > Windows Update"
-            $recommendations += "  → Reboot system after installation completes"
+            $recommendations += "* NOTICE: High network latency detected (Avg $avgLatency ms)"
+            $recommendations += "  -> Check local network congestion"
+            $recommendations += "  -> Contact ISP if latency persists"
         }
     }
 
@@ -1481,15 +1825,15 @@ function New-Report {
                 $freePercent = [int]$matches[2]
                 
                 if ($freePercent -lt 10) {
-                    $recommendations += "• CRITICAL: Drive $driveLetter has less than 10% free space"
-                    $recommendations += "  → Delete unnecessary files immediately"
-                    $recommendations += "  → Use Disk Cleanup (cleanmgr.exe)"
-                    $recommendations += "  → Move files to external storage"
-                    $recommendations += "  → System performance will degrade below 10% free"
+                    $recommendations += "* CRITICAL: Drive $driveLetter has less than 10% free space"
+                    $recommendations += "  -> Delete unnecessary files immediately"
+                    $recommendations += "  -> Use Disk Cleanup (cleanmgr.exe)"
+                    $recommendations += "  -> Move files to external storage"
+                    $recommendations += "  -> System performance will degrade below 10% free"
                 } elseif ($freePercent -lt 20) {
-                    $recommendations += "• WARNING: Drive $driveLetter has less than 20% free space"
-                    $recommendations += "  → Clean up unnecessary files soon"
-                    $recommendations += "  → Use Storage Sense or Disk Cleanup"
+                    $recommendations += "* WARNING: Drive $driveLetter has less than 20% free space"
+                    $recommendations += "  -> Clean up unnecessary files soon"
+                    $recommendations += "  -> Use Storage Sense or Disk Cleanup"
                 }
             }
         }
@@ -1498,84 +1842,125 @@ function New-Report {
     # === SSD TRIM STATUS ===
     $trimInfo = $TestResults | Where-Object {$_.Tool -eq "SSD-TRIM"}
     if ($trimInfo -and $trimInfo.Output -match "Disabled") {
-        $recommendations += "• WARNING: TRIM is disabled for SSD"
-        $recommendations += "  → Enable TRIM: fsutil behavior set DisableDeleteNotify 0"
-        $recommendations += "  → TRIM maintains SSD performance and longevity"
+        $recommendations += "* WARNING: TRIM is disabled for SSD"
+        $recommendations += "  -> Enable TRIM: fsutil behavior set DisableDeleteNotify 0"
+        $recommendations += "  -> TRIM maintains SSD performance and longevity"
     }
 
-    # === NETWORK PERFORMANCE ===
+    # === NETWORK ADAPTERS - skip virtual/VPN interfaces to avoid false positives ===
     $nicInfo = $TestResults | Where-Object {$_.Tool -eq "NIC-Info"}
     if ($nicInfo) {
-        if ($nicInfo.Output -match "10 Mbps|100 Mbps") {
-            $recommendations += "• INFO: Slow network adapter detected (10/100 Mbps)"
-            $recommendations += "  → Upgrade to Gigabit Ethernet (1000 Mbps)"
-            $recommendations += "  → Check cable quality (use Cat5e or Cat6)"
+        $physicalSlowAdapter = $false
+        foreach ($nicLine in ($nicInfo.Output -split "`n")) {
+            # Only flag PHYSICAL adapters at 10/100 Mbps - exclude known virtual/VPN adapters
+            # FIX v2.5 Issue #9: Added ZeroTier, Cisco AnyConnect, GlobalProtect, Fortinet,
+            #                    NordLynx, Pulse, Bluetooth PAN, ProtonVPN to exclusion list
+            if ($nicLine -match "(10 Mbps|100 Mbps)" -and
+                $nicLine -notmatch "VMware|VMnet|Virtual|vEthernet|Tailscale|Mullvad|WireGuard|Loopback|Hyper-V|VPN|TAP-Windows|OpenVPN|ZeroTier|AnyConnect|GlobalProtect|Fortinet|FortiClient|NordLynx|Pulse|Bluetooth|ProtonVPN|Surfshark|Wi-Fi|Wireless|WLAN") {
+                $physicalSlowAdapter = $true
+                break
+            }
         }
-        
+        if ($physicalSlowAdapter) {
+            $recommendations += "* WARNING: Physical network adapter running at 10/100 Mbps"
+            $recommendations += "  -> Upgrade to Gigabit Ethernet (1000 Mbps)"
+            $recommendations += "  -> Check cable quality (use Cat5e or Cat6)"
+        }
+
         if ($nicInfo.Output -match "No active adapters") {
-            $recommendations += "• CRITICAL: No active network adapters"
-            $recommendations += "  → Check network cable connections"
-            $recommendations += "  → Verify adapter is enabled in Device Manager"
-            $recommendations += "  → Update network drivers"
+            $recommendations += "* CRITICAL: No active network adapters"
+            $recommendations += "  -> Check network cable connections"
+            $recommendations += "  -> Verify adapter is enabled in Device Manager"
+            $recommendations += "  -> Update network drivers"
         }
     }
 
     # === WINDOWS UPDATE ===
-    $updateInfo = $TestResults | Where-Object {$_.Tool -eq "Windows-Update"}
+    # Single consolidated block - a previous early check for "Pending > 0" existed
+    # above and produced duplicate/contradictory entries when the count was also
+    # caught by the WARNING or INFO branches here. Removed; all cases handled below.
+    $updateInfo = $TestResults | Where-Object {$_.Tool -eq "Windows-Update"} | Select-Object -Last 1
     if ($updateInfo) {
         if ($updateInfo.Output -match "Pending: (\d+)") {
             $pendingCount = [int]$matches[1]
             if ($pendingCount -gt 20) {
-                $recommendations += "• WARNING: $pendingCount pending Windows Updates"
-                $recommendations += "  → Install updates soon for security and stability"
-                $recommendations += "  → Schedule during non-working hours"
-                $recommendations += "  → Ensure backup before major updates"
+                $recommendations += "* WARNING: $pendingCount pending Windows Updates"
+                $recommendations += "  -> Install updates soon for security and stability"
+                $recommendations += "  -> Schedule during non-working hours"
+                $recommendations += "  -> Ensure backup before major updates"
             } elseif ($pendingCount -gt 5) {
-                $recommendations += "• INFO: $pendingCount pending Windows Updates available"
-                $recommendations += "  → Install updates when convenient"
-            } elseif ($pendingCount -eq 0) {
-                $recommendations += "• GOOD: Windows is up to date"
+                $recommendations += "* INFO: $pendingCount pending Windows Updates available"
+                $recommendations += "  -> Install updates when convenient"
+            } elseif ($pendingCount -gt 0) {
+                $recommendations += "* ACTION: $pendingCount Windows update(s) pending installation"
+                $recommendations += "  -> Install updates via Settings > Windows Update"
+                $recommendations += "  -> Reboot after installation completes"
+            } else {
+                $recommendations += "* GOOD: Windows is up to date"
             }
         }
         
-        if ($updateInfo.Output -match "Service: Stopped") {
-            $recommendations += "• WARNING: Windows Update service is stopped"
-            $recommendations += "  → Start service: net start wuauserv"
-            $recommendations += "  → Set to Automatic in services.msc"
+        # FIX v2.5.1: wuauserv StartType=Disabled is the real problem signal.
+        # Status=Stopped is normal (trigger-started on demand by Win 10/11).
+        if ($updateInfo.Output -match "Service StartType: Disabled") {
+            $recommendations += "* WARNING: Windows Update service is DISABLED"
+            $recommendations += "  -> Re-enable: Set-Service wuauserv -StartupType Manual"
+            $recommendations += "  -> Verify in services.msc"
+        }
+
+        if ($updateInfo.Output -match "Search failed:") {
+            $recommendations += "* WARNING: Windows Update search failed"
+            $recommendations += "  -> Try: Stop-Service wuauserv; Start-Service wuauserv"
+            $recommendations += "  -> Check BITS and Cryptographic Services are running"
+            $recommendations += "  -> If persistent: DISM /Online /Cleanup-Image /RestoreHealth"
         }
     }
 
     # === OS HEALTH (DISM/SFC) ===
     $osHealth = $TestResults | Where-Object {$_.Tool -eq "OS-Health"}
     if ($osHealth -and $osHealth.Status -eq "SUCCESS") {
-        if ($osHealth.Output -match "corrupt|error|repairable") {
-            $recommendations += "• WARNING: System file corruption detected"
-            $recommendations += "  → Run: DISM /Online /Cleanup-Image /RestoreHealth"
-            $recommendations += "  → Then run: sfc /scannow"
-            $recommendations += "  → Reboot and re-test"
+        $oh = $osHealth.Output
+        # Language-neutral: DISM exit code 11 = repairable corruption; any non-zero = error.
+        # Embedded by Test-OSHealth as "DISM-ExitCode: N" for coverage on non-English systems.
+        $dismExitBad = ($oh -match 'DISM-ExitCode: (\d+)') -and ([int]$matches[1] -ne 0)
+        # Text-based detection (English systems): also catches SFC findings.
+        # Added "DISM encountered|could not perform" to cover DISM runtime failures that were
+        # previously matched by the removed "error" term. Added "No integrity violations" to
+        # the notmatch guard to prevent a false positive from DISM /CheckHealth clean output.
+        $textMatch = $oh -match "found corrupt|store is repairable|requires repair|cannot repair|integrity violations|DISM encountered|could not perform the requested operation"
+        $notNegative = $oh -notmatch "did not find any integrity violations|No component store corruption|No integrity violations"
+        if (($dismExitBad -or $textMatch) -and $notNegative) {
+            $recommendations += "* WARNING: System file corruption detected"
+            $recommendations += "  -> Run: DISM /Online /Cleanup-Image /RestoreHealth"
+            $recommendations += "  -> Then run: sfc /scannow"
+            $recommendations += "  -> Reboot and re-test"
         }
     }
 
     # === HARDWARE ERRORS (WHEA) ===
     $wheaInfo = $TestResults | Where-Object {$_.Tool -eq "WHEA"}
     if ($wheaInfo -and $wheaInfo.Output -notmatch "No WHEA errors") {
-        $recommendations += "• WARNING: Hardware errors detected in event log"
-        $recommendations += "  → Review Event Viewer for details"
-        $recommendations += "  → Test RAM with Windows Memory Diagnostic"
-        $recommendations += "  → Update BIOS/UEFI firmware"
-        $recommendations += "  → Check for overheating issues"
+        $recommendations += "* WARNING: Hardware errors detected in event log"
+        $recommendations += "  -> Review Event Viewer for details"
+        $recommendations += "  -> Test RAM with Windows Memory Diagnostic"
+        $recommendations += "  -> Update BIOS/UEFI firmware"
+        $recommendations += "  -> Check for overheating issues"
     }
 
     # === CPU PERFORMANCE ===
     $cpuPerf = $TestResults | Where-Object {$_.Tool -eq "CPU-Performance"}
     if ($cpuPerf -and $cpuPerf.Output -match "Ops/sec: (\d+)") {
         $opsPerSec = [int]$matches[1]
-        if ($opsPerSec -lt 5000000) {
-            $recommendations += "• INFO: CPU performance lower than expected"
-            $recommendations += "  → Check for background processes consuming CPU"
-            $recommendations += "  → Set power plan to High Performance"
-            $recommendations += "  → Check CPU temperatures (thermal throttling)"
-            $recommendations += "  → Update chipset drivers"
+        # FIX v2.5.1: Synthetic test pipes every iteration through Out-Null;
+        # PowerShell pipeline overhead caps it at 50-200k ops/sec on any modern
+        # CPU. Original 5M threshold fired on every healthy system (false positive
+        # 100% of the time). Below 30k indicates real trouble.
+        if ($opsPerSec -lt 30000) {
+            $recommendations += "* INFO: CPU synthetic test slower than typical"
+            $recommendations += "  -> Check for background processes consuming CPU"
+            $recommendations += "  -> Set power plan to High Performance"
+            $recommendations += "  -> Check CPU temperatures (thermal throttling)"
+            $recommendations += "  -> Update chipset drivers"
         }
     }
 
@@ -1586,10 +1971,10 @@ function New-Report {
             if ([int]::TryParse($matches[1], [ref]$driverYear)) {
                 $currentYear = (Get-Date).Year
                 if ($currentYear - $driverYear -gt 1) {
-                    $recommendations += "• INFO: GPU drivers are over 1 year old"
-                    $recommendations += "  → Update to latest drivers for best performance"
-                    $recommendations += "  → NVIDIA: GeForce Experience or nvidia.com"
-                    $recommendations += "  → AMD: amd.com/en/support"
+                    $recommendations += "* INFO: GPU drivers are over 1 year old"
+                    $recommendations += "  -> Update to latest drivers for best performance"
+                    $recommendations += "  -> NVIDIA: GeForce Experience or nvidia.com"
+                    $recommendations += "  -> AMD: amd.com/en/support"
                 }
             }
         }
@@ -1597,37 +1982,44 @@ function New-Report {
 
     # === BATTERY HEALTH (Laptops) ===
     $powerInfo = $TestResults | Where-Object {$_.Tool -eq "Power-Energy"}
-    if ($powerInfo -and $powerInfo.Output -match "Battery") {
+    if ($powerInfo -and $powerInfo.Output -match "Battery: ") {
         if ($powerInfo.Output -match "energy-report.html") {
-            $recommendations += "• INFO: Energy report generated"
-            $recommendations += "  → Review energy-report.html for battery health"
+            $recommendations += "* INFO: Energy report generated"
+            $recommendations += "  -> Review energy-report.html for battery health"
         }
     }
 
     # === OVERALL SYSTEM HEALTH ===
     if ($failed -gt 5) {
-        $recommendations += "• CRITICAL: Multiple test failures ($failed failures)"
-        $recommendations += "  → Review detailed report for specific issues"
-        $recommendations += "  → Consider professional diagnostics"
+        $recommendations += "* CRITICAL: Multiple test failures ($failed failures)"
+        $recommendations += "  -> Review detailed report for specific issues"
+        $recommendations += "  -> Consider professional diagnostics"
     }
 
-    if ($failed -eq 0 -and $skipped -eq 0) {
-        $recommendations += "• EXCELLENT: All tests passed successfully"
-        $recommendations += "  → System is operating normally"
+    # FIX v2.5.1: "EXCELLENT" used to fire whenever no tests crashed, even when
+    # the engine had just printed multiple WARNING/CRITICAL items. Reads as
+    # self-contradictory in the report. Now requires zero prior issues OR
+    # downgrades to a neutral "all tests ran" message when issues exist.
+    $priorIssues = @($recommendations | Where-Object { $_ -match "^\* (CRITICAL|WARNING)" }).Count
+    if ($failed -eq 0 -and $skipped -eq 0 -and $priorIssues -eq 0) {
+        $recommendations += "* EXCELLENT: All tests passed and no issues detected"
+        $recommendations += "  -> System is operating normally"
+    } elseif ($failed -eq 0 -and $skipped -eq 0) {
+        $recommendations += "* INFO: All tests ran successfully ($priorIssues item(s) flagged above)"
     } elseif ($skipped -gt 5) {
-        $recommendations += "• INFO: $skipped tests skipped (admin required)"
-        $recommendations += "  → Run as administrator for complete diagnostics"
+        $recommendations += "* INFO: $skipped tests skipped (admin required)"
+        $recommendations += "  -> Run as administrator for complete diagnostics"
     }
 
     # === GENERAL MAINTENANCE ===
     if ($recommendations.Count -lt 3) {
         $recommendations += ""
         $recommendations += "GENERAL MAINTENANCE TIPS:"
-        $recommendations += "• Keep Windows and drivers updated"
-        $recommendations += "• Run disk cleanup monthly (cleanmgr.exe)"
-        $recommendations += "• Monitor temperatures during heavy use"
-        $recommendations += "• Maintain at least 20% free disk space"
-        $recommendations += "• Back up important data regularly"
+        $recommendations += "* Keep Windows and drivers updated"
+        $recommendations += "* Run disk cleanup monthly (cleanmgr.exe)"
+        $recommendations += "* Monitor temperatures during heavy use"
+        $recommendations += "* Maintain at least 20% free disk space"
+        $recommendations += "* Back up important data regularly"
     }
 
     # Add all recommendations to report
@@ -1672,8 +2064,8 @@ function New-Report {
 
     # Save reports
     try {
-        $cleanReport | Out-File -FilePath $cleanPath -Encoding UTF8
-        $detailedReport | Out-File -FilePath $detailedPath -Encoding UTF8
+        $cleanReport | Out-File -FilePath $cleanPath -Encoding ASCII
+        $detailedReport | Out-File -FilePath $detailedPath -Encoding ASCII
 
         $cleanSize = [math]::Round((Get-Item $cleanPath).Length/1KB,1)
         $detailSize = [math]::Round((Get-Item $detailedPath).Length/1KB,1)
@@ -1701,6 +2093,134 @@ function New-Report {
     }
 }
 
+# GPU Tool auto-downloader — called from SystemTester.bat via -DownloadGPUTool param.
+# Uses curl.exe -> BITS -> Invoke-WebRequest in order, stops on first success.
+# Keeping this in PS1 avoids all cmd.exe ^ continuation / delayed-expansion escaping
+# issues that corrupt inline -Command blocks containing ! { } characters.
+function Invoke-GPUToolDownload {
+    param([string]$Tool, [string]$TargetDir)
+
+    if (-not (Test-Path $TargetDir)) {
+        New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+    }
+
+    $config = switch ($Tool) {
+        "MSIAfterburner" { @{
+            Url      = "https://download.msi.com/uti_exe/vga/MSIAfterburnerSetup.zip"
+            File     = "MSIAfterburnerSetup.zip"
+            MinBytes = 1MB
+            Note     = "Extract the ZIP and run MSIAfterburnerSetup.exe to install."
+        }}
+        "FurMark" { @{
+            Url      = "https://geeks3d.com/dl/get/777"
+            File     = "FurMark_Setup.exe"
+            MinBytes = 500KB
+            Note     = "Run FurMark_Setup.exe to install. Generates significant GPU heat - monitor temps."
+        }}
+        default {
+            Write-Host "Unknown tool: $Tool" -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    $outFile = Join-Path $TargetDir $config.File
+    $url     = $config.Url
+    $ok      = $false
+    $lastErr = "(none)"
+
+    Write-Host ""
+    Write-Host "Downloading $Tool..." -ForegroundColor Cyan
+    Write-Host "  URL  : $url" -ForegroundColor Gray
+    Write-Host "  Saved: $outFile" -ForegroundColor Gray
+    Write-Host "  Trying curl.exe, BITS, then Invoke-WebRequest..." -ForegroundColor DarkGray
+    Write-Host ""
+
+    # Method 1: curl.exe (WinHTTP/Schannel - TLS 1.3, VPN-safe)
+    $curlCmd = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curlCmd -and -not $ok) {
+        Write-Host "  Trying curl.exe..." -ForegroundColor Yellow
+        & curl.exe --silent --show-error --location --output $outFile `
+            --max-time 180 --retry 1 --insecure $url 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $outFile)) {
+            $sz = (Get-Item $outFile).Length
+            if ($sz -ge $config.MinBytes) {
+                $ok = $true
+                Write-Host "  [curl.exe] $([math]::Round($sz/1MB,1)) MB downloaded" -ForegroundColor DarkGray
+            } else {
+                Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+                $lastErr = "curl: file too small ($sz bytes - likely an error page)"
+            }
+        } else {
+            $lastErr = "curl exited $LASTEXITCODE"
+        }
+    }
+
+    # Method 2: BITS
+    if (-not $ok) {
+        Write-Host "  Trying BITS..." -ForegroundColor Yellow
+        try {
+            Import-Module BitsTransfer -ErrorAction Stop
+            Start-BitsTransfer -Source $url -Destination $outFile -ErrorAction Stop
+            if (Test-Path $outFile) {
+                $sz = (Get-Item $outFile).Length
+                if ($sz -ge $config.MinBytes) {
+                    $ok = $true
+                    Write-Host "  [BITS] $([math]::Round($sz/1MB,1)) MB downloaded" -ForegroundColor DarkGray
+                } else {
+                    Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+                    $lastErr = "BITS: file too small ($sz bytes)"
+                }
+            }
+        } catch {
+            $lastErr = $_.Exception.Message
+            Write-Host "  BITS failed: $lastErr" -ForegroundColor DarkYellow
+        }
+    }
+
+    # Method 3: Invoke-WebRequest (.NET)
+    if (-not $ok) {
+        Write-Host "  Trying Invoke-WebRequest..." -ForegroundColor Yellow
+        $prevCb   = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+        $prevProt = [Net.ServicePointManager]::SecurityProtocol
+        try {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+            $proto = $prevProt
+            try { $proto = $proto -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+            try { $proto = $proto -bor [Net.SecurityProtocolType]::Tls13 } catch {}
+            [Net.ServicePointManager]::SecurityProtocol = $proto
+
+            Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+            if (Test-Path $outFile) {
+                $sz = (Get-Item $outFile).Length
+                if ($sz -ge $config.MinBytes) {
+                    $ok = $true
+                    Write-Host "  [IWR] $([math]::Round($sz/1MB,1)) MB downloaded" -ForegroundColor DarkGray
+                } else {
+                    Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+                    $lastErr = "IWR: file too small ($sz bytes)"
+                }
+            }
+        } catch {
+            $lastErr = $_.Exception.Message
+            Write-Host "  IWR failed: $lastErr" -ForegroundColor DarkYellow
+        } finally {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCb
+            [Net.ServicePointManager]::SecurityProtocol = $prevProt
+        }
+    }
+
+    Write-Host ""
+    if ($ok) {
+        Write-Host "SUCCESS: $Tool downloaded" -ForegroundColor Green
+        Write-Host "Saved to: $outFile" -ForegroundColor White
+        Write-Host $config.Note -ForegroundColor Cyan
+    } else {
+        Write-Host "ERROR: All download methods failed" -ForegroundColor Red
+        Write-Host "Last error: $lastErr" -ForegroundColor Red
+        exit 1
+    }
+}
+
 # Menu
 function Show-Menu {
     Clear-Host
@@ -1723,9 +2243,9 @@ function Show-Menu {
     Write-Host "11. Network Adapters"
     Write-Host "12. GPU (Enhanced)" -ForegroundColor Cyan
     <#
-    Write-Host "    └─ 12a. Basic GPU Info"
-    Write-Host "    └─ 12b. Vendor-Specific (NVIDIA/AMD)"
-    Write-Host "    └─ 12c. GPU Memory Test"
+    Write-Host "    +- 12a. Basic GPU Info"
+    Write-Host "    +- 12b. Vendor-Specific (NVIDIA/AMD)"
+    Write-Host "    +- 12c. GPU Memory Test"
     #>
     Write-Host "    - 12a. Basic GPU Info"
     Write-Host "    - 12b. Vendor-Specific (NVIDIA/AMD)"
@@ -1803,14 +2323,22 @@ function Start-Menu {
 
 # Main - only execute if script is run directly (not dot-sourced)
 if ($MyInvocation.InvocationName -ne '.') {
+
+    # Download-only mode: invoked by SystemTester.bat GPU tool download menu.
+    # Runs without the interactive menu or test suite.
+    if ($DownloadGPUTool) {
+        if (-not $DownloadDir) { $DownloadDir = Join-Path $ScriptRoot "Tools" }
+        Invoke-GPUToolDownload -Tool $DownloadGPUTool -TargetDir $DownloadDir
+        exit 0
+    }
+
     try {
         Write-Host "Starting Sysinternals Tester v$script:VERSION..." -ForegroundColor Green
 
-        $envReady = Initialize-Environment
-        if (!$envReady) {
-            Write-Host "`nWARNING: Tools missing - limited functionality" -ForegroundColor Yellow
-            Write-Host "Use menu to download Sysinternals tools" -ForegroundColor Yellow
-            Start-Sleep -Seconds 2
+        if (!(Initialize-Environment)) {
+            Write-Host "`nSetup required." -ForegroundColor Red
+            Read-Host "Press Enter to exit"
+            exit 1
         }
 
         if ($AutoRun) {
