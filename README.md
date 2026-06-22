@@ -23,7 +23,7 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
  
 ## What's New in v2.6
  
-v2.6 is a quality and reliability release. The network speed test engine has been fully rewritten around `curl.exe` to resolve systematic TLS failures on modern endpoints. GPU tool downloads now work reliably via a new PowerShell function that fixes a batch-file parser bug triggered by Windows delayed variable expansion. A PNWC branded startup banner has been added. Thirteen bugs have been corrected, including six recommendation engine false positives and three tool output cleaner failures discovered during live test validation.
+v2.6 is a quality and reliability release. The network speed test engine has been fully rewritten around `curl.exe` to resolve systematic TLS failures on modern endpoints. GPU tool downloads now work reliably via a new PowerShell function that fixes a batch-file parser bug triggered by Windows delayed variable expansion. Thirteen bugs have been corrected, including six recommendation engine false positives and three tool output cleaner failures discovered during live test validation.
  
 ### New Features
  
