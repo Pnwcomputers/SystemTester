@@ -1,0 +1,34 @@
+# --- SystemTester Specific ---
+# Ignore the generated reports (contains private system info!)
+/Reports/
+/Logs/
+*.txt
+*.csv
+*.html
+*.json
+
+# Ignore the Sysinternals binaries
+# (Users should download these fresh via the script)
+/Tools/
+*.exe
+*.zip
+*.msi
+
+# --- Windows System Clutter ---
+[Dd]esktop.ini
+[Tt]humbs.db
+$RECYCLE.BIN/
+*.lnk
+
+# --- PowerShell / Development ---
+.history.ndjson
+__pycache__/
+*.log
+*.err
+/docs/_site/
+
+# --- IDE / Editor Settings ---
+.vscode/
+.idea/
+*.swp
+*.bak

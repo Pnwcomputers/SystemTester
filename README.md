@@ -23,7 +23,7 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
  
 ## What's New in v2.6
  
-v2.6 is a quality and reliability release. The network speed test engine has been fully rewritten around `curl.exe` to resolve systematic TLS failures on modern endpoints. GPU tool downloads now work reliably via a new PowerShell function that fixes a batch-file parser bug triggered by Windows delayed variable expansion. A PNWC branded startup banner has been added. Six false positive and recommendation gap issues in the recommendations engine have been corrected.
+v2.6 is a quality and reliability release. The network speed test engine has been fully rewritten around `curl.exe` to resolve systematic TLS failures on modern endpoints. GPU tool downloads now work reliably via a new PowerShell function that fixes a batch-file parser bug triggered by Windows delayed variable expansion. A PNWC branded startup banner has been added. Thirteen bugs have been corrected, including six recommendation engine false positives and three tool output cleaner failures discovered during live test validation.
  
 ### New Features
  
@@ -44,6 +44,9 @@ v2.6 is a quality and reliability release. The network speed test engine has bee
 | 8 | SMART Detection | `"Unhealthy"` `HealthStatus` from `Get-PhysicalDisk` not included in the recommendations pattern | Medium: actively failing drives not flagged |
 | 9 | Windows Update | Two separate check blocks both fired `"ACTION: N update(s) pending"` for any `pendingCount > 0` | Low: doubled recommendations on most systems |
 | 10 | Windows Update | After removing the duplicate early check, 1–5 pending updates produced no recommendation at all | Low: silent gap in coverage for minor pending counts |
+| 11 | Tool Output | `clockres` and `du` not in the `-accepteula` list — full Sysinternals EULA text was written into the clock resolution and disk usage report sections instead of actual data | Medium: two report sections always empty/garbage |
+| 12 | Security Analysis | `autorunsc` argument `-a -c` caused autorunsc to consume `-c` as the type-selection character for `-a` (codecs only), leaving no CSV flag — tool printed usage/help text instead of autorun entries | Medium: autorun entries never captured |
+| 13 | Tool Output | `2>&1` stderr capture produced raw PowerShell `NativeCommandError` / `CategoryInfo` / `FullyQualifiedErrorId` formatting inside tool output sections | Low: error-object noise cluttering report output |
  
 ### What Changed Technically
  
@@ -62,6 +65,11 @@ v2.6 is a quality and reliability release. The network speed test engine has bee
 - Battery: match narrowed from `"Battery"` to `"Battery: "` (colon + space) — only matches actual battery data lines
 - NIC exclusion: added `Wi-Fi|Wireless|WLAN` to the virtual/non-physical adapter exclusion pattern
 - Windows Update: consolidated into a single check block covering the full range: `>20` (WARNING), `>5` (INFO), `>0` (ACTION), `0` (GOOD)
+
+**`Convert-ToolOutput` cleaner: Output quality fixes**
+- Added `clockres` and `du` to the `-accepteula` injection list so clock resolution and disk usage sections show actual data instead of EULA text
+- Added `NativeCommandError|CategoryInfo|FullyQualifiedErrorId|RemoteException|At .*\.ps1:` to the per-line skip pattern to strip PowerShell error-object formatting from `2>&1` captures
+- Fixed `autorunsc` argument from `-a -c` to `-c`: `-a` was consuming `-c` as its selection character (codecs), leaving no CSV flag; default logon-entry CSV output now works correctly
 ---
  
 ## Key Capabilities
@@ -362,6 +370,9 @@ The `Reports\` folder is created automatically the first time a report is genera
 - Fixed Wi-Fi NIC false positive: added `Wi-Fi|Wireless|WLAN` to adapter exclusion pattern
 - Fixed SMART detection: added `"Unhealthy"` to `HealthStatus` pattern match
 - Fixed Windows Update: consolidated duplicate check blocks; added branch for 1–5 pending updates
+- Fixed clockres and du EULA output: added both to `-accepteula` injection list
+- Fixed autorunsc producing usage text: corrected argument from `-a -c` to `-c` (default logon entries, CSV)
+- Fixed PowerShell error formatting leaking into report output: added NativeCommandError/CategoryInfo filter to output cleaner
  
 ### v2.5: April 2026
 - Fixed latency test crash: removed undefined `$targetPort` and broken `Test-NetConnection` args
