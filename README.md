@@ -135,8 +135,3 @@ Nothing in this tool uploads files anywhere. VirusTotal lookups send **file hash
 **Full menu map (PowerShell interactive mode):** 1–15 diagnostics · 16 Run ALL · 17 Reports · 18 Clear · **19 Malware/Threat Scan · 20 GUI Threat Analysis · 21 Event Log Threat Audit**
 
 *Pacific Northwest Computers; jon@pnwcomputers.com*
-
-*Pacific Northwest Computers; jon@pnwcomputers.com*
-**Full menu map (PowerShell interactive mode):** 1–15 diagnostics · 16 Run ALL · 17 Reports · 18 Clear · **19 Malware/Threat Scan · 20 GUI Threat Analysis · 21 Event Log Threat Audit**
-
-*Pacific Northwest Computers; jon@pnwcomputers.com*
