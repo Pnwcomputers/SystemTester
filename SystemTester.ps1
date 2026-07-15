@@ -1,6 +1,6 @@
 # Portable Sysinternals System Tester
 # Created by Pacific Northwest Computers - 2025
-# Complete Production Version - v2.6
+# Complete Production Version - v3.0
 
 param(
     [switch]$AutoRun,
@@ -9,12 +9,13 @@ param(
 )
 
 # Constants
-$script:VERSION = "2.6"
+$script:VERSION = "3.0"
 $script:DXDIAG_TIMEOUT = 45
 $script:ENERGY_DURATION = 15
 $script:CPU_TEST_SECONDS = 10
 $script:MAX_PATH_LENGTH = 240
 $script:MIN_TOOL_SIZE_KB = 50
+$script:EVENTLOG_LOOKBACK_DAYS = 14
 
 # Paths
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -142,7 +143,8 @@ function Test-ToolVerification {
     $allTools = @(
     "psinfo","coreinfo","pslist","handle","clockres",
     "autorunsc","du","streams","contig","sigcheck",
-    "testlimit","diskext","listdlls"
+    "testlimit","diskext","listdlls",
+    "procexp","autoruns","psping"
     )
     
     $stats = @{
@@ -573,6 +575,586 @@ function Test-Processes {
 function Test-Security {
     Write-Host "`n=== Security Analysis ===" -ForegroundColor Green
     Invoke-Tool -ToolName "autorunsc" -ArgumentList "-c" -Description "Autorun entries" -RequiresAdmin $true
+}
+
+# ============================================================================
+# MALWARE / THREAT SCAN (new in v3.0)
+# Uses Autoruns (autorunsc), Sigcheck, and ListDLLs to hunt for indicators of
+# malicious software: VirusTotal hash detections, unsigned binaries in
+# user-writable/temp locations, and system-process name masquerading.
+# NOTE: This is a TRIAGE aid, not a replacement for a full AV/EDR scan.
+# ============================================================================
+
+# Quick TCP reachability check for VirusTotal (nothing is sent here)
+function Test-VirusTotalReachable {
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $async = $client.BeginConnect("www.virustotal.com", 443, $null, $null)
+        $connected = $async.AsyncWaitHandle.WaitOne(4000, $false)
+        if ($connected -and $client.Connected) { $client.Close(); return $true }
+        $client.Close()
+    } catch {}
+    return $false
+}
+
+# Run a Sysinternals tool with CSV output (-c) and return parsed objects.
+# Output is redirected to a temp file via cmd.exe so the UTF-16/UTF-8 BOM the
+# tools emit on redirected stdout survives intact. PowerShell's native output
+# capture decodes with the console codepage and garbles UTF-16, which would
+# corrupt every field. Get-Content auto-detects the BOM on read.
+function Invoke-SysinternalsCsv {
+    param([string]$ToolName, [string[]]$Arguments)
+
+    $toolPath = Join-Path $SysinternalsPath "$ToolName.exe"
+    if (!(Test-Path $toolPath)) { return $null }
+
+    $tmp = Join-Path $env:TEMP "$($ToolName)_$([guid]::NewGuid().ToString('N')).csv"
+    try {
+        $argString = ($Arguments | ForEach-Object {
+            if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+        }) -join ' '
+        # cmd /s preserves the inner quoting exactly as written
+        cmd /s /c "`"$toolPath`" $argString > `"$tmp`" 2>nul" | Out-Null
+
+        if (!(Test-Path $tmp) -or (Get-Item $tmp).Length -eq 0) { return $null }
+        $raw = Get-Content $tmp -Raw -ErrorAction Stop
+
+        # Skip any banner lines that precede the CSV header row
+        $lines = @($raw -split "`r?`n" | Where-Object { $_ })
+        $headerIndex = -1
+        for ($i = 0; $i -lt [math]::Min($lines.Count, 10); $i++) {
+            if ($lines[$i] -match '^"?(Time|Path)"?,') { $headerIndex = $i; break }
+        }
+        if ($headerIndex -lt 0) { return $null }
+        return @(($lines[$headerIndex..($lines.Count - 1)] -join "`n") | ConvertFrom-Csv)
+    } catch {
+        return $null
+    } finally {
+        if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# Parse a VirusTotal detection string. Handles both "3|70" and "3/70" formats
+# plus "Unknown" (hash never seen by VT - itself noteworthy for autoruns).
+function Get-VTDetection {
+    param([string]$Text)
+    if ($Text -and $Text -match '(\d+)\s*[|/]\s*(\d+)') {
+        return @{ Hits = [int]$matches[1]; Total = [int]$matches[2]; Known = $true }
+    }
+    return @{ Hits = 0; Total = 0; Known = $false }
+}
+
+# Paths malware favors. High-risk = suspicious even when signed.
+$script:HighRiskPathRegex = '(?i)\\Windows\\Temp\\|\\AppData\\Local\\Temp\\|\\Users\\Public\\|\$Recycle\.Bin|\\PerfLogs\\'
+# User-writable = suspicious only when the file is also unsigned (plenty of
+# legit apps run from AppData: Chrome updater, Discord, Slack, OneDrive...)
+$script:UserWritablePathRegex = '(?i)\\AppData\\|\\ProgramData\\|\\Users\\[^\\]+\\Downloads\\'
+
+# System processes commonly impersonated by malware -> expected home path
+$script:MasqueradeMap = @{
+    "svchost.exe"   = '(?i)\\Windows\\(System32|SysWOW64)\\'
+    "csrss.exe"     = '(?i)\\Windows\\System32\\'
+    "lsass.exe"     = '(?i)\\Windows\\System32\\'
+    "services.exe"  = '(?i)\\Windows\\System32\\'
+    "winlogon.exe"  = '(?i)\\Windows\\System32\\'
+    "smss.exe"      = '(?i)\\Windows\\System32\\'
+    "wininit.exe"   = '(?i)\\Windows\\System32\\'
+    "spoolsv.exe"   = '(?i)\\Windows\\System32\\'
+    "explorer.exe"  = '(?i)\\Windows\\explorer\.exe$'
+    "taskhostw.exe" = '(?i)\\Windows\\System32\\'
+    "dllhost.exe"   = '(?i)\\Windows\\(System32|SysWOW64)\\'
+    "conhost.exe"   = '(?i)\\Windows\\System32\\'
+}
+
+function Test-MalwareScan {
+    Write-Host "`n=== MALWARE / THREAT SCAN ===" -ForegroundColor Magenta
+    Write-Host "Autoruns + Sigcheck + ListDLLs triage - NOT a full antivirus scan" -ForegroundColor DarkGray
+
+    if (-not $script:IsAdmin) {
+        Write-Host "WARNING: Not admin - some autorun locations and processes will be missed" -ForegroundColor Yellow
+    }
+
+    $vtOnline = Test-VirusTotalReachable
+    if ($vtOnline) {
+        Write-Host "VirusTotal: reachable - hash lookups ENABLED (only hashes are sent, never files)" -ForegroundColor Green
+    } else {
+        Write-Host "VirusTotal: unreachable - offline signature analysis only" -ForegroundColor Yellow
+    }
+
+    # ---- Part 1: Autorun entries (autorunsc) --------------------------------
+    Write-Host "`nScanning ALL autorun locations (signed-Microsoft entries hidden)..." -ForegroundColor Cyan
+    if ($vtOnline) { Write-Host "VT hash lookups can add several minutes on a busy system." -ForegroundColor DarkGray }
+
+    $start = Get-Date
+    # -a * every entry type | -c CSV | -h hashes | -s verify signatures
+    # -m hide verified-Microsoft entries | -v -vt VirusTotal hash lookup
+    $arArgs = @("-accepteula","-nobanner","-a","*","-c","-h","-s","-m")
+    if ($vtOnline) { $arArgs += @("-v","-vt") }
+    $entries = Invoke-SysinternalsCsv -ToolName "autorunsc" -Arguments $arArgs
+    $arDuration = ((Get-Date) - $start).TotalMilliseconds
+
+    if ($null -eq $entries) {
+        Write-Host "ERROR: autorunsc produced no parseable output (tool missing or blocked)" -ForegroundColor Red
+        $script:TestResults += @{
+            Tool="Malware-Autoruns"; Description="Autorun entry threat analysis (autorunsc)"
+            Status="FAILED"; Output="autorunsc.exe missing or produced no CSV output"; Duration=0
+        }
+    } else {
+        $vtFlagged = @()
+        $suspiciousEntries = @()
+        $vtUnknown = 0
+        $unsignedTotal = 0
+
+        foreach ($e in $entries) {
+            $img = $e.'Image Path'
+            if (-not $img) { continue }
+            $signer = "$($e.Signer)"
+            $isSigned = $signer -match '^\(Verified\)'
+            $desc = "[$($e.'Entry Location')] $($e.Entry) -> $img"
+
+            if ($vtOnline) {
+                $vt = Get-VTDetection $e.'VT detection'
+                if ($vt.Hits -gt 0) {
+                    $vtFlagged += "$desc  [VT: $($vt.Hits)/$($vt.Total)] Signer: $signer"
+                    continue
+                }
+                if (-not $vt.Known) { $vtUnknown++ }
+            }
+
+            if (-not $isSigned) {
+                $unsignedTotal++
+                if ($img -match $script:HighRiskPathRegex -or $img -match $script:UserWritablePathRegex) {
+                    $suspiciousEntries += "$desc  [UNSIGNED, user-writable path]"
+                }
+            } elseif ($img -match $script:HighRiskPathRegex) {
+                $suspiciousEntries += "$desc  [Signed, but launches from temp/public path]"
+            }
+        }
+
+        $out = @()
+        $out += "Non-Microsoft autorun entries analyzed: $($entries.Count)"
+        $out += "Unsigned entries: $unsignedTotal"
+        if ($vtOnline) { $out += "Hashes unknown to VirusTotal: $vtUnknown" }
+        $out += "VT-Flagged: $($vtFlagged.Count)"
+        if ($vtFlagged.Count -gt 0) {
+            $out += ">>> VIRUSTOTAL DETECTIONS (investigate immediately):"
+            $vtFlagged | ForEach-Object { $out += "  $_" }
+        }
+        $out += "Unsigned-Suspicious: $($suspiciousEntries.Count)"
+        if ($suspiciousEntries.Count -gt 0) {
+            $out += ">>> SUSPICIOUS AUTORUN ENTRIES (manual review needed):"
+            $suspiciousEntries | Select-Object -First 25 | ForEach-Object { $out += "  $_" }
+            if ($suspiciousEntries.Count -gt 25) {
+                $out += "  ... and $($suspiciousEntries.Count - 25) more (use Autoruns GUI for full view)"
+            }
+        }
+        if ($vtFlagged.Count -eq 0 -and $suspiciousEntries.Count -eq 0) {
+            $out += "No autorun red flags detected"
+        }
+
+        $script:TestResults += @{
+            Tool="Malware-Autoruns"; Description="Autorun entry threat analysis (autorunsc)"
+            Status="SUCCESS"; Output=($out -join "`n"); Duration=$arDuration
+        }
+        $arColor = if ($vtFlagged.Count -gt 0) {"Red"} elseif ($suspiciousEntries.Count -gt 0) {"Yellow"} else {"Green"}
+        Write-Host "Autoruns: $($entries.Count) entries | VT hits: $($vtFlagged.Count) | Suspicious: $($suspiciousEntries.Count)" -ForegroundColor $arColor
+    }
+
+    # ---- Part 2: Running processes (Process Explorer-style checks) ----------
+    Write-Host "`nVerifying running processes (signatures, paths, name masquerading)..." -ForegroundColor Cyan
+    $start = Get-Date
+    try {
+        $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+        $byPath = @{}
+        $masqHits = @()
+        $highRiskProcs = @()
+
+        foreach ($p in $procs) {
+            $path = $p.ExecutablePath
+            $name = "$($p.Name)".ToLower()
+
+            # Masquerade check: system process name running outside its home
+            if ($script:MasqueradeMap.ContainsKey($name)) {
+                if ($path -and ($path -notmatch $script:MasqueradeMap[$name])) {
+                    $masqHits += "$($p.Name) (PID $($p.ProcessId)) running from: $path"
+                }
+            }
+
+            if (-not $path) { continue }
+            if (-not $byPath.ContainsKey($path)) { $byPath[$path] = @() }
+            $byPath[$path] += $p.ProcessId
+
+            if ($path -match $script:HighRiskPathRegex) {
+                $highRiskProcs += "$($p.Name) (PID $($p.ProcessId)) from temp/public path: $path"
+            }
+        }
+
+        # Local signature check on every unique process image (fast, offline)
+        $unsignedProcs = @()
+        foreach ($path in @($byPath.Keys)) {
+            try {
+                $sig = Get-AuthenticodeSignature -FilePath $path -ErrorAction Stop
+                if ($sig.Status -ne "Valid") {
+                    $unsignedProcs += @{ Path=$path; Pids=($byPath[$path] -join ","); SigStatus="$($sig.Status)" }
+                }
+            } catch {
+                $unsignedProcs += @{ Path=$path; Pids=($byPath[$path] -join ","); SigStatus="CheckFailed" }
+            }
+        }
+
+        # VirusTotal-check the unsigned images via sigcheck (capped for runtime)
+        $procVtFlagged = @()
+        $vtChecked = 0
+        $vtCheckCap = 15
+        if ($vtOnline -and $unsignedProcs.Count -gt 0) {
+            $toCheck = [math]::Min($unsignedProcs.Count, $vtCheckCap)
+            Write-Host "Checking $toCheck unsigned process image(s) against VirusTotal..." -ForegroundColor Yellow
+            foreach ($u in ($unsignedProcs | Select-Object -First $vtCheckCap)) {
+                $rows = Invoke-SysinternalsCsv -ToolName "sigcheck" -Arguments @("-accepteula","-nobanner","-c","-h","-v","-vt",$u.Path)
+                $vtChecked++
+                if ($rows) {
+                    $vt = Get-VTDetection ($rows | Select-Object -First 1).'VT detection'
+                    if ($vt.Hits -gt 0) {
+                        $procVtFlagged += "$($u.Path) (PID $($u.Pids))  [VT: $($vt.Hits)/$($vt.Total)]"
+                    }
+                }
+            }
+        }
+
+        $out = @()
+        $out += "Processes examined: $($procs.Count) ($($byPath.Count) unique images)"
+        $out += "Masquerade-Hits: $($masqHits.Count)"
+        if ($masqHits.Count -gt 0) {
+            $out += ">>> SYSTEM PROCESS NAME MASQUERADING (strong malware indicator):"
+            $masqHits | ForEach-Object { $out += "  $_" }
+        }
+        $out += "Proc-HighRiskPath: $($highRiskProcs.Count)"
+        if ($highRiskProcs.Count -gt 0) {
+            $out += ">>> PROCESSES RUNNING FROM TEMP/PUBLIC PATHS:"
+            $highRiskProcs | ForEach-Object { $out += "  $_" }
+        }
+        $out += "Proc-VT-Flagged: $($procVtFlagged.Count)"
+        if ($procVtFlagged.Count -gt 0) {
+            $out += ">>> VIRUSTOTAL DETECTIONS ON RUNNING PROCESSES:"
+            $procVtFlagged | ForEach-Object { $out += "  $_" }
+        }
+        $out += "Proc-Unsigned: $($unsignedProcs.Count)"
+        if ($unsignedProcs.Count -gt 0) {
+            $out += "Unsigned / invalid-signature process images:"
+            $unsignedProcs | Select-Object -First 20 | ForEach-Object {
+                $out += "  $($_.Path) (PID $($_.Pids)) [$($_.SigStatus)]"
+            }
+            if ($unsignedProcs.Count -gt 20) { $out += "  ... and $($unsignedProcs.Count - 20) more" }
+            $out += "Note: unsigned alone is not proof of malware - many legit apps ship unsigned EXEs"
+        }
+        if ($vtOnline) { $out += "VT lookups performed on $vtChecked unsigned image(s) (cap: $vtCheckCap)" }
+
+        $script:TestResults += @{
+            Tool="Malware-Processes"; Description="Running process threat analysis (sigcheck + heuristics)"
+            Status="SUCCESS"; Output=($out -join "`n"); Duration=(((Get-Date) - $start).TotalMilliseconds)
+        }
+        $procColor = if (($masqHits.Count + $procVtFlagged.Count) -gt 0) {"Red"} elseif ($highRiskProcs.Count -gt 0) {"Yellow"} else {"Green"}
+        Write-Host "Processes: masquerade $($masqHits.Count) | temp-path $($highRiskProcs.Count) | unsigned $($unsignedProcs.Count) | VT hits $($procVtFlagged.Count)" -ForegroundColor $procColor
+    } catch {
+        Write-Host "Process analysis failed: $($_.Exception.Message)" -ForegroundColor Red
+        $script:TestResults += @{
+            Tool="Malware-Processes"; Description="Running process threat analysis"
+            Status="FAILED"; Output="Error: $($_.Exception.Message)"; Duration=0
+        }
+    }
+
+    # ---- Part 3: Unsigned DLLs loaded into processes (admin only) -----------
+    if ($script:IsAdmin) {
+        $listdllsPath = Join-Path $SysinternalsPath "listdlls.exe"
+        if (Test-Path $listdllsPath) {
+            Write-Host "`nScanning for unsigned DLLs in running processes (can take 1-3 min)..." -ForegroundColor Cyan
+            try {
+                $start = Get-Date
+                $raw = & $listdllsPath -accepteula -u 2>&1 | Out-String
+                $duration = ((Get-Date) - $start).TotalMilliseconds
+                $dllLines = @($raw -split "`r?`n" | Where-Object {
+                    $_.Trim() -and $_ -notmatch "Copyright|Sysinternals|www\.|Listdlls v|^-+$"
+                } | Select-Object -First 60)
+                if (-not $dllLines) { $dllLines = @("No unsigned DLLs reported") }
+                $script:TestResults += @{
+                    Tool="Malware-UnsignedDLLs"; Description="Unsigned DLLs in running processes (listdlls -u)"
+                    Status="SUCCESS"; Output=($dllLines -join "`n"); Duration=$duration
+                }
+                Write-Host "Unsigned DLL scan complete" -ForegroundColor Green
+            } catch {
+                Write-Host "listdlls scan failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    } else {
+        Write-Host "`nSKIP: Unsigned DLL scan (requires admin)" -ForegroundColor Yellow
+        $script:TestResults += @{
+            Tool="Malware-UnsignedDLLs"; Description="Unsigned DLLs in running processes"
+            Status="SKIPPED"; Output="Requires administrator privileges"; Duration=0
+        }
+    }
+
+    # ---- Part 4: Event log threat audit (v3.0) ------------------------------
+    Test-EventLogThreats
+
+    Write-Host "`nMalware scan complete. For hands-on review use Menu Option 20" -ForegroundColor Cyan
+    Write-Host "(Process Explorer / Autoruns GUI with VirusTotal pre-enabled)." -ForegroundColor Cyan
+}
+
+# Launch Process Explorer / Autoruns GUIs pre-configured for threat hunting
+function Start-MalwareGUITools {
+    Write-Host "`n=== GUI THREAT ANALYSIS TOOLS ===" -ForegroundColor Magenta
+
+    $procexpPath  = Join-Path $SysinternalsPath "procexp.exe"
+    $autorunsPath = Join-Path $SysinternalsPath "Autoruns.exe"
+
+    # Pre-accept EULAs and enable VirusTotal hash checking. Hashes only, no
+    # file uploads: VirusTotalSubmitUnknown deliberately stays 0.
+    try {
+        $peKey = "HKCU:\Software\Sysinternals\Process Explorer"
+        if (!(Test-Path $peKey)) { New-Item -Path $peKey -Force | Out-Null }
+        Set-ItemProperty -Path $peKey -Name "EulaAccepted" -Value 1 -Type DWord
+        Set-ItemProperty -Path $peKey -Name "VirusTotalCheck" -Value 1 -Type DWord
+        Set-ItemProperty -Path $peKey -Name "VirusTotalSubmitUnknown" -Value 0 -Type DWord
+        $arKey = "HKCU:\Software\Sysinternals\AutoRuns"
+        if (!(Test-Path $arKey)) { New-Item -Path $arKey -Force | Out-Null }
+        Set-ItemProperty -Path $arKey -Name "EulaAccepted" -Value 1 -Type DWord
+        Write-Host "VirusTotal hash checking pre-enabled for Process Explorer" -ForegroundColor DarkGray
+    } catch {
+        Write-Host "Could not pre-configure tool settings: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "1. Process Explorer (live process / DLL / handle inspection)"
+    Write-Host "2. Autoruns (every autostart location, signature + VT columns)"
+    Write-Host "3. Both"
+    Write-Host "4. Back"
+    $choice = Read-Host "Choice (1-4)"
+
+    if ($choice -in @("1","3")) {
+        if (Test-Path $procexpPath) {
+            Start-Process $procexpPath -ArgumentList "/accepteula"
+            Write-Host ""
+            Write-Host "PROCESS EXPLORER TRIAGE TIPS:" -ForegroundColor Cyan
+            Write-Host " - Options > VirusTotal.com > Check VirusTotal.com (pre-enabled here)" -ForegroundColor Gray
+            Write-Host " - View > Select Columns > add 'Verified Signer' and 'VirusTotal'" -ForegroundColor Gray
+            Write-Host " - Purple rows = packed/compressed images (common malware trait)" -ForegroundColor Gray
+            Write-Host " - Ctrl+D = DLL view, Ctrl+H = handle view for selected process" -ForegroundColor Gray
+            Write-Host " - Right-click suspicious process > Check VirusTotal / Search Online" -ForegroundColor Gray
+        } else {
+            Write-Host "procexp.exe not found - use Batch Menu Option 5 to download the suite" -ForegroundColor Red
+        }
+    }
+    if ($choice -in @("2","3")) {
+        if (Test-Path $autorunsPath) {
+            Start-Process $autorunsPath
+            Write-Host ""
+            Write-Host "AUTORUNS TRIAGE TIPS:" -ForegroundColor Cyan
+            Write-Host " - Options > Scan Options > 'Verify code signatures' + 'Check VirusTotal.com', then F5" -ForegroundColor Gray
+            Write-Host " - Options > Hide Microsoft entries (cuts the noise)" -ForegroundColor Gray
+            Write-Host " - Yellow rows = target file missing; pink rows = no publisher/signature" -ForegroundColor Gray
+            Write-Host " - Right-click entry > Jump to Image / Search Online" -ForegroundColor Gray
+        } else {
+            Write-Host "Autoruns.exe not found - use Batch Menu Option 5 to download the suite" -ForegroundColor Red
+        }
+    }
+}
+
+# ============================================================================
+# EVENT LOG THREAT AUDIT (new in v3.0)
+# Native Windows event logs hold high-signal compromise indicators that file
+# and process scans miss: Defender detections, protection tampering, cleared
+# logs, service-based persistence, encoded PowerShell, and account abuse.
+# Runs inside Test-MalwareScan (Part 4) and standalone via Menu Option 21.
+# ============================================================================
+
+# Safe wrapper: missing logs, disabled logs, access denied, and zero matches
+# all return an empty array instead of throwing.
+function Get-ThreatEvents {
+    param([hashtable]$Filter, [int]$MaxEvents = 300)
+    try {
+        return @(Get-WinEvent -FilterHashtable $Filter -MaxEvents $MaxEvents -ErrorAction Stop)
+    } catch {
+        return @()
+    }
+}
+
+function Test-EventLogThreats {
+    Write-Host "`n=== EVENT LOG THREAT AUDIT ===" -ForegroundColor Magenta
+    Write-Host "Scanning event logs for compromise indicators (last $script:EVENTLOG_LOOKBACK_DAYS days)..." -ForegroundColor DarkGray
+
+    $start = Get-Date
+    $since = (Get-Date).AddDays(-$script:EVENTLOG_LOOKBACK_DAYS)
+    $sinceDefender = (Get-Date).AddDays(-30)   # detections matter even when older
+    $out = @()
+
+    # ---- 1. Windows Defender: detections & failed remediations -------------
+    Write-Host "Checking Windows Defender detection history (30 days)..." -ForegroundColor Cyan
+    $defDetect = Get-ThreatEvents -Filter @{
+        LogName='Microsoft-Windows-Windows Defender/Operational'
+        Id=@(1006,1007,1008,1015,1116,1117,1118,1119); StartTime=$sinceDefender }
+    $out += "EventLog-DefenderDetections: $($defDetect.Count)"
+    if ($defDetect.Count -gt 0) {
+        $out += ">>> DEFENDER MALWARE DETECTIONS (30 days):"
+        foreach ($ev in ($defDetect | Select-Object -First 15)) {
+            $threat = "(see Event Viewer for details)"
+            if ($ev.Message -match "Name:\s*([^\r\n]+)") { $threat = $matches[1].Trim() }
+            $out += ("  [{0:yyyy-MM-dd HH:mm}] ID {1}: {2}" -f $ev.TimeCreated, $ev.Id, $threat)
+        }
+        if ($defDetect.Count -gt 15) { $out += "  ... and $($defDetect.Count - 15) more" }
+    }
+
+    # ---- 2. Defender protection tampering -----------------------------------
+    # 5001 real-time protection disabled | 5010 scanning disabled
+    # 5012 virus scanning disabled       | 5013 tamper protection blocked a change
+    $defTamper = Get-ThreatEvents -Filter @{
+        LogName='Microsoft-Windows-Windows Defender/Operational'
+        Id=@(5001,5010,5012,5013); StartTime=$since }
+    $out += "EventLog-DefenderTampering: $($defTamper.Count)"
+    if ($defTamper.Count -gt 0) {
+        $out += ">>> PROTECTION TAMPERING EVENTS:"
+        foreach ($ev in ($defTamper | Select-Object -First 10)) {
+            $out += ("  [{0:yyyy-MM-dd HH:mm}] ID {1}: {2}" -f $ev.TimeCreated, $ev.Id, ($ev.Message -split "`r?`n")[0])
+        }
+    }
+
+    # ---- 3. Event logs cleared (anti-forensics) ------------------------------
+    Write-Host "Checking for cleared logs, new services, PowerShell abuse..." -ForegroundColor Cyan
+    $cleared = @(Get-ThreatEvents -Filter @{ LogName='System'; Id=104; StartTime=$since })
+    if ($script:IsAdmin) {
+        $cleared += Get-ThreatEvents -Filter @{ LogName='Security'; Id=1102; StartTime=$since }
+    }
+    $out += "EventLog-LogsCleared: $($cleared.Count)"
+    if ($cleared.Count -gt 0) {
+        $out += ">>> LOG CLEAR EVENTS (attackers clear logs to hide tracks):"
+        foreach ($ev in $cleared) {
+            $out += ("  [{0:yyyy-MM-dd HH:mm}] {1} log cleared" -f $ev.TimeCreated, $ev.LogName)
+        }
+    }
+
+    # ---- 4. New service installs (System 7045 - persistence) ----------------
+    $svcNew = Get-ThreatEvents -Filter @{
+        LogName='System'; ProviderName='Service Control Manager'; Id=7045; StartTime=$since }
+    $suspSvc = @()
+    foreach ($ev in $svcNew) {
+        $svcName = ""; $svcImage = ""
+        try {
+            if ($ev.Properties.Count -ge 2) {
+                $svcName  = "$($ev.Properties[0].Value)"
+                $svcImage = "$($ev.Properties[1].Value)"
+            }
+        } catch {}
+        if ($svcImage -and ($svcImage -match $script:HighRiskPathRegex -or $svcImage -match $script:UserWritablePathRegex)) {
+            $suspSvc += ("  [{0:yyyy-MM-dd}] {1} -> {2}" -f $ev.TimeCreated, $svcName, $svcImage)
+        }
+    }
+    $out += "New services installed: $($svcNew.Count)"
+    $out += "EventLog-SuspiciousServices: $($suspSvc.Count)"
+    if ($suspSvc.Count -gt 0) {
+        $out += ">>> NEW SERVICES FROM USER-WRITABLE/TEMP PATHS (persistence):"
+        $suspSvc | ForEach-Object { $out += $_ }
+    }
+
+    # ---- 5. Security service crashes (7034) ---------------------------------
+    $svcCrash = Get-ThreatEvents -Filter @{
+        LogName='System'; ProviderName='Service Control Manager'; Id=7034; StartTime=$since }
+    $secCrash = @($svcCrash | Where-Object {
+        $_.Message -match "(?i)defender|antivirus|firewall|security center|windefend|wscsvc|mpssvc|securityhealth" })
+    $out += "Service crashes (7034): $($svcCrash.Count)"
+    $out += "EventLog-SecuritySvcCrashes: $($secCrash.Count)"
+    if ($secCrash.Count -gt 0) {
+        $out += ">>> SECURITY SERVICE CRASHES (possible malware interference):"
+        foreach ($ev in ($secCrash | Select-Object -First 10)) {
+            $out += ("  [{0:yyyy-MM-dd HH:mm}] {1}" -f $ev.TimeCreated, ($ev.Message -split "`r?`n")[0])
+        }
+    }
+
+    # ---- 6. Suspicious PowerShell (4104 script block logging) ---------------
+    # Warning-level 4104s are auto-logged even without a ScriptBlockLogging
+    # policy (AMSI flags the content as suspicious). Keyword-match the rest.
+    $psEvents = Get-ThreatEvents -Filter @{
+        LogName='Microsoft-Windows-PowerShell/Operational'; Id=4104; StartTime=$since } -MaxEvents 500
+    $psSusp = @($psEvents | Where-Object {
+        $_.LevelDisplayName -eq "Warning" -or
+        $_.Message -match "(?i)encodedcommand|frombase64string|downloadstring|downloadfile|invoke-expression|invoke-mimikatz|amsiinitfailed|-nop .*hidden|hidden .*-nop" })
+    $out += "EventLog-SuspiciousPowerShell: $($psSusp.Count)"
+    if ($psSusp.Count -gt 0) {
+        $out += ">>> SUSPICIOUS POWERSHELL SCRIPT BLOCKS:"
+        foreach ($ev in ($psSusp | Select-Object -First 10)) {
+            $snippet = (($ev.Message -replace "\s+", " ").Trim())
+            if ($snippet.Length -gt 140) { $snippet = $snippet.Substring(0,140) + "..." }
+            $out += ("  [{0:yyyy-MM-dd HH:mm}] {1}" -f $ev.TimeCreated, $snippet)
+        }
+        if ($psSusp.Count -gt 10) { $out += "  ... and $($psSusp.Count - 10) more" }
+        $out += "  Note: admin tools (RMM, installers, this script) can trigger these - verify context"
+    }
+
+    # ---- 7. Account & logon auditing (Security log, admin only) -------------
+    if ($script:IsAdmin) {
+        Write-Host "Auditing account changes and failed logons..." -ForegroundColor Cyan
+        $newAccounts = Get-ThreatEvents -Filter @{ LogName='Security'; Id=4720; StartTime=$since }
+        $out += "EventLog-NewAccounts: $($newAccounts.Count)"
+        if ($newAccounts.Count -gt 0) {
+            $out += ">>> USER ACCOUNTS CREATED:"
+            foreach ($ev in ($newAccounts | Select-Object -First 10)) {
+                $acct = "(unknown)"
+                try { if ($ev.Properties.Count -ge 1) { $acct = "$($ev.Properties[0].Value)" } } catch {}
+                $out += ("  [{0:yyyy-MM-dd HH:mm}] Account created: {1}" -f $ev.TimeCreated, $acct)
+            }
+        }
+
+        # 4732: member added to security-enabled local group; Properties[2] = group
+        # NOTE: group-name match is English-locale ("Administrators")
+        $adminAdds = @(Get-ThreatEvents -Filter @{ LogName='Security'; Id=4732; StartTime=$since } |
+            Where-Object { try { $_.Properties.Count -ge 3 -and "$($_.Properties[2].Value)" -match "Admin" } catch { $false } })
+        $out += "EventLog-AdminGroupAdds: $($adminAdds.Count)"
+        if ($adminAdds.Count -gt 0) {
+            $out += ">>> MEMBERS ADDED TO ADMINISTRATORS GROUP:"
+            foreach ($ev in ($adminAdds | Select-Object -First 10)) {
+                $sid = ""
+                try { $sid = "$($ev.Properties[1].Value)" } catch {}
+                $out += ("  [{0:yyyy-MM-dd HH:mm}] Member SID {1} added to {2}" -f $ev.TimeCreated, $sid, "$($ev.Properties[2].Value)")
+            }
+        }
+
+        $failed = Get-ThreatEvents -Filter @{ LogName='Security'; Id=4625; StartTime=$since } -MaxEvents 1000
+        $failedCount = if ($failed.Count -ge 1000) { "1000+" } else { "$($failed.Count)" }
+        $out += "Failed logons (4625): $failedCount"
+        $bruteForce = if ($failed.Count -gt 50) { 1 } else { 0 }
+        $out += "EventLog-BruteForce: $bruteForce"
+        if ($bruteForce -eq 1) {
+            $out += ">>> HIGH FAILED-LOGON VOLUME - possible brute-force/password spray"
+            $out += "  Check source IPs/workstations in the Security log; disable exposed RDP"
+        }
+    } else {
+        $out += "Security log auditing: SKIPPED (requires admin)"
+        $out += "EventLog-NewAccounts: 0"
+        $out += "EventLog-AdminGroupAdds: 0"
+        $out += "EventLog-BruteForce: 0"
+    }
+
+    # ---- 8. Sysmon presence (optional Sysinternals telemetry) ---------------
+    try {
+        $sysmonLog = Get-WinEvent -ListLog "Microsoft-Windows-Sysmon/Operational" -ErrorAction Stop
+        $out += "Sysmon: INSTALLED ($($sysmonLog.RecordCount) events) - deep telemetry available in Event Viewer"
+    } catch {
+        $out += "Sysmon: not installed (optional Sysinternals service for deep process/network telemetry)"
+    }
+
+    # Overall red-flag tally for console color + report engine
+    $joined = $out -join "`n"
+    $redFlags = 0
+    foreach ($k in @("EventLog-DefenderDetections","EventLog-DefenderTampering","EventLog-LogsCleared","EventLog-SuspiciousServices","EventLog-SecuritySvcCrashes","EventLog-SuspiciousPowerShell","EventLog-NewAccounts","EventLog-AdminGroupAdds")) {
+        if ($joined -match "$($k): (\d+)") { $redFlags += [int]$matches[1] }
+    }
+    if ($joined -match "EventLog-BruteForce: 1") { $redFlags++ }
+    if ($redFlags -eq 0) { $out += "No event log red flags detected" }
+
+    $script:TestResults += @{
+        Tool="Malware-EventLog"; Description="Event log threat audit (Defender/services/PowerShell/accounts)"
+        Status="SUCCESS"; Output=($out -join "`n"); Duration=(((Get-Date) - $start).TotalMilliseconds)
+    }
+    $elColor = if ($redFlags -gt 0) {"Yellow"} else {"Green"}
+    Write-Host "Event log audit: $redFlags red flag(s) across Defender/services/PowerShell/accounts" -ForegroundColor $elColor
 }
 
 # Test: Network
@@ -1734,6 +2316,22 @@ function New-Report {
         $updateInfo.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
     }
 
+    # === MALWARE / THREAT SCAN SUMMARY (v3.0) ===
+    $malAutoruns = $TestResults | Where-Object {$_.Tool -eq "Malware-Autoruns"} | Select-Object -Last 1
+    $malProcs    = $TestResults | Where-Object {$_.Tool -eq "Malware-Processes"} | Select-Object -Last 1
+    $malEvents   = $TestResults | Where-Object {$_.Tool -eq "Malware-EventLog"} | Select-Object -Last 1
+    if ($malAutoruns -or $malProcs -or $malEvents) {
+        $cleanReport += ""
+        $cleanReport += "MALWARE / THREAT SCAN:"
+        foreach ($m in @($malAutoruns, $malProcs, $malEvents)) {
+            if (-not $m) { continue }
+            # Summary counters, >>> flag headers, and their indented detail lines
+            $m.Output -split "`n" | Where-Object {
+                $_ -match "^(Non-Microsoft|Unsigned entries|Hashes unknown|Processes examined|VT-Flagged|Unsigned-Suspicious|Masquerade-Hits|Proc-VT-Flagged|Proc-HighRiskPath|Proc-Unsigned|No autorun red flags|EventLog-|New services installed|Service crashes|Failed logons|Security log auditing|Sysmon:|No event log red flags|>>>)" -or $_ -match "^\s+\S"
+            } | Select-Object -First 30 | ForEach-Object { $cleanReport += "  $_" }
+        }
+    }
+
     # ========================================
     # ENHANCED RECOMMENDATIONS ENGINE
     # ========================================
@@ -1946,6 +2544,53 @@ function New-Report {
         $recommendations += "  -> Test RAM with Windows Memory Diagnostic"
         $recommendations += "  -> Update BIOS/UEFI firmware"
         $recommendations += "  -> Check for overheating issues"
+    }
+
+    # === MALWARE / THREAT INDICATORS (v3.0) ===
+    # $malAutoruns / $malProcs / $malEvents are populated in the key-findings section above
+    if ($malAutoruns -or $malProcs -or $malEvents) {
+        $vtHits = 0; $suspicious = 0; $masq = 0
+        $defDetections = 0; $tampering = 0; $logsCleared = 0
+        if ($malAutoruns -and $malAutoruns.Output -match "VT-Flagged: (\d+)") { $vtHits += [int]$matches[1] }
+        if ($malProcs -and $malProcs.Output -match "Proc-VT-Flagged: (\d+)") { $vtHits += [int]$matches[1] }
+        if ($malAutoruns -and $malAutoruns.Output -match "Unsigned-Suspicious: (\d+)") { $suspicious += [int]$matches[1] }
+        if ($malProcs -and $malProcs.Output -match "Proc-HighRiskPath: (\d+)") { $suspicious += [int]$matches[1] }
+        if ($malProcs -and $malProcs.Output -match "Masquerade-Hits: (\d+)") { $masq = [int]$matches[1] }
+        if ($malEvents) {
+            if ($malEvents.Output -match "EventLog-DefenderDetections: (\d+)") { $defDetections = [int]$matches[1] }
+            if ($malEvents.Output -match "EventLog-DefenderTampering: (\d+)") { $tampering += [int]$matches[1] }
+            if ($malEvents.Output -match "EventLog-LogsCleared: (\d+)") { $logsCleared = [int]$matches[1] }
+            foreach ($k in @("EventLog-SuspiciousServices","EventLog-SuspiciousPowerShell","EventLog-NewAccounts","EventLog-AdminGroupAdds","EventLog-SecuritySvcCrashes")) {
+                if ($malEvents.Output -match "$($k): (\d+)") { $suspicious += [int]$matches[1] }
+            }
+            if ($malEvents.Output -match "EventLog-BruteForce: 1") { $suspicious += 1 }
+        }
+
+        $malwareCritical = $false
+        if ($vtHits -gt 0 -or $masq -gt 0 -or $defDetections -gt 0) {
+            $malwareCritical = $true
+            $recommendations += "* CRITICAL: Possible MALWARE detected ($vtHits VirusTotal hit(s), $masq masquerading process(es), $defDetections Defender detection(s))"
+            $recommendations += "  -> Disconnect system from network until reviewed"
+            $recommendations += "  -> See MALWARE / THREAT SCAN section in detailed report for flagged items"
+            $recommendations += "  -> Verify in Process Explorer / Autoruns GUI (Menu Option 20)"
+            $recommendations += "  -> Run full AV scan (Microsoft Defender Offline scan recommended)"
+            $recommendations += "  -> Confirm before deleting - VT hits under ~5/70 can be false positives"
+        }
+        if ($tampering -gt 0 -or $logsCleared -gt 0) {
+            $malwareCritical = $true
+            $recommendations += "* CRITICAL: Security tampering indicators ($tampering protection-disable event(s), $logsCleared log-clear event(s))"
+            $recommendations += "  -> AV protection disabled or event logs cleared - common attacker anti-forensics"
+            $recommendations += "  -> Review Malware-EventLog section: who/what disabled protection and when"
+            $recommendations += "  -> Re-enable Defender real-time protection before returning the system"
+        }
+        if (-not $malwareCritical -and $suspicious -gt 0) {
+            $recommendations += "* WARNING: $suspicious suspicious item(s) found - manual review needed"
+            $recommendations += "  -> Unsigned binaries, temp-path launches, new services/accounts, or PowerShell flags"
+            $recommendations += "  -> Inspect in Process Explorer / Autoruns GUI (Menu Option 20) and Event Viewer"
+            $recommendations += "  -> Many are legitimate (updaters, RMM tools, portable apps) - verify context"
+        } elseif (-not $malwareCritical) {
+            $recommendations += "* GOOD: No malware indicators in autoruns, processes, or event logs"
+        }
     }
 
     # === CPU PERFORMANCE ===
@@ -2257,6 +2902,9 @@ function Show-Menu {
     Write-Host "16. Run ALL Tests" -ForegroundColor Yellow
     Write-Host "17. Generate Report (Clean + Detailed)" -ForegroundColor Green
     Write-Host "18. Clear Results" -ForegroundColor Red
+    Write-Host "19. Malware/Threat Scan (Autoruns + Sigcheck + VirusTotal) $(if (-not $script:IsAdmin) {'[Admin recommended]'})" -ForegroundColor Magenta
+    Write-Host "20. GUI Threat Analysis (Process Explorer / Autoruns)" -ForegroundColor Magenta
+    Write-Host "21. Event Log Threat Audit (Defender/Services/PowerShell) $(if (-not $script:IsAdmin) {'[Admin recommended]'})" -ForegroundColor Magenta
     Write-Host "Q.  Quit"
     Write-Host ""
     Write-Host "Tests completed: $($TestResults.Count)" -ForegroundColor Gray
@@ -2265,7 +2913,7 @@ function Show-Menu {
 function Start-Menu {
     do {
         Show-Menu
-        $choice = Read-Host "`nSelect (1-18, 12a-c, Q)"
+        $choice = Read-Host "`nSelect (1-21, 12a-c, Q)"
         switch ($choice) {
             "1"  { Test-SystemInfo; Read-Host "`nPress Enter" }
             "2"  { Test-CPU; Read-Host "`nPress Enter" }
@@ -2306,7 +2954,8 @@ function Start-Menu {
             "16" {
                 Write-Host "`nRunning all tests..." -ForegroundColor Yellow
                 Test-SystemInfo; Test-CPU; Test-Memory; Test-Storage
-                Test-Processes; Test-Security; Test-Network; Test-OSHealth
+                Test-Processes; Test-Security; Test-MalwareScan
+                Test-Network; Test-OSHealth
                 Test-StorageSMART; Test-Trim; Test-NIC
                 Test-GPU; Test-GPUVendorSpecific; Test-GPUMemory  # All GPU tests
                 Test-Power; Test-HardwareEvents; Test-WindowsUpdate
@@ -2315,6 +2964,9 @@ function Start-Menu {
             }
             "17" { New-Report; Read-Host "`nPress Enter" }
             "18" { $script:TestResults = @(); Write-Host "Cleared" -ForegroundColor Green; Start-Sleep 1 }
+            "19" { Test-MalwareScan; Read-Host "`nPress Enter" }
+            "20" { Start-MalwareGUITools; Read-Host "`nPress Enter" }
+            "21" { Test-EventLogThreats; Read-Host "`nPress Enter" }
             "Q"  { return }
             "q"  { return }
             default { Write-Host "Invalid" -ForegroundColor Red; Start-Sleep 1 }
@@ -2349,7 +3001,8 @@ if ($MyInvocation.InvocationName -ne '.') {
                 Start-Sleep -Seconds 2
             }
             Test-SystemInfo; Test-CPU; Test-Memory; Test-Storage
-            Test-Processes; Test-Security; Test-Network; Test-OSHealth
+            Test-Processes; Test-Security; Test-MalwareScan
+            Test-Network; Test-OSHealth
             Test-StorageSMART; Test-Trim; Test-NIC
             Test-GPU; Test-GPUVendorSpecific; Test-GPUMemory
             Test-Power; Test-HardwareEvents; Test-WindowsUpdate
