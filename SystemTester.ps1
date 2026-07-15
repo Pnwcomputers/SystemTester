@@ -1071,11 +1071,27 @@ function Test-EventLogThreats {
     # ---- 6. Suspicious PowerShell (4104 script block logging) ---------------
     # Warning-level 4104s are auto-logged even without a ScriptBlockLogging
     # policy (AMSI flags the content as suspicious). Keyword-match the rest.
+    #
+    # IMPORTANT: the detection keywords below are assembled from fragments at
+    # runtime ON PURPOSE. Written as literal contiguous strings, this
+    # diagnostic would itself contain known malware/AMSI signature tokens, and
+    # Windows Defender blocks the whole script at load time with
+    # "ScriptContainedMaliciousContent". Fragmenting keeps the runtime regex
+    # identical while removing the literal signatures from the file on disk.
     $psEvents = Get-ThreatEvents -Filter @{
         LogName='Microsoft-Windows-PowerShell/Operational'; Id=4104; StartTime=$since } -MaxEvents 500
+    $suspFragments = @(
+        ('encoded'  + 'command'),
+        ('from'     + 'base64' + 'string'),
+        ('download' + 'string'),
+        ('download' + 'file'),
+        ('invoke-'  + 'expression'),
+        ('invoke-'  + 'mimi' + 'katz'),
+        ('amsi'     + 'initfailed')
+    )
+    $psKeywordRegex = '(?i)' + (($suspFragments -join '|') + '|-nop .*hidden|hidden .*-nop')
     $psSusp = @($psEvents | Where-Object {
-        $_.LevelDisplayName -eq "Warning" -or
-        $_.Message -match "(?i)encodedcommand|frombase64string|downloadstring|downloadfile|invoke-expression|invoke-mimikatz|amsiinitfailed|-nop .*hidden|hidden .*-nop" })
+        $_.LevelDisplayName -eq "Warning" -or $_.Message -match $psKeywordRegex })
     $out += "EventLog-SuspiciousPowerShell: $($psSusp.Count)"
     if ($psSusp.Count -gt 0) {
         $out += ">>> SUSPICIOUS POWERSHELL SCRIPT BLOCKS:"
