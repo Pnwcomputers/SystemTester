@@ -21,11 +21,11 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
 * Quickly identifying performance bottlenecks.
 ---
  
-# What's New in v3 — Malware & Threat Detection
+# What's New in v3: Malware & Threat Detection
 
-**PNWC Portable Sysinternals System Tester** now goes beyond hardware diagnostics. v3 adds a full malware triage layer built on Sysinternals Autoruns, Sigcheck, ListDLLs, and Process Explorer, plus a native Windows Event Log threat audit — all integrated into the existing report and recommendations engine.
+**PNWC Portable Sysinternals System Tester** now goes beyond hardware diagnostics. v3 adds a full malware triage layer built on Sysinternals Autoruns, Sigcheck, ListDLLs, and Process Explorer, plus a native Windows Event Log threat audit; all integrated into the existing report and recommendations engine.
 
-> This is a triage aid for bench technicians. It is **not** a replacement for a full antivirus/EDR scan — it tells you *where to look first*.
+> This is a triage aid for bench technicians. It is **not** a replacement for a full antivirus/EDR scan; it tells you *where to look first*.
 
 ---
 
@@ -41,13 +41,13 @@ Runs standalone or automatically as part of **Run ALL Tests**. Four analysis pas
 
 **2. Running-process verification (Process Explorer-style checks)**
 - Authenticode signature check on every unique process image
-- **System-process masquerade detection** — `svchost.exe`, `lsass.exe`, `csrss.exe`, etc. running outside their expected System32 homes (a strong malware indicator)
+- **System-process masquerade detection**; `svchost.exe`, `lsass.exe`, `csrss.exe`, etc. running outside their expected System32 homes (a strong malware indicator)
 - Flags processes running from temp/public paths
 - VirusTotal hash check (via `sigcheck`) on unsigned process images
 
-**3. Unsigned DLL scan (`listdlls -u`)** — unsigned DLLs loaded into running processes (admin only)
+**3. Unsigned DLL scan (`listdlls -u`)**; unsigned DLLs loaded into running processes (admin only)
 
-**4. Event Log Threat Audit** — see below; also runs inside the scan
+**4. Event Log Threat Audit** (see below) also runs inside the scan
 
 Works offline: if VirusTotal is unreachable, the scan automatically falls back to signature-and-heuristics-only analysis.
 
@@ -55,25 +55,25 @@ Works offline: if VirusTotal is unreachable, the scan automatically falls back t
 
 Fast, native audit of high-signal compromise indicators (14-day lookback):
 
-- **Windows Defender history (30 days)** — malware detections, remediation failures
-- **Protection tampering** — real-time protection disabled, scanning disabled (events 5001/5010/5012/5013)
-- **Cleared event logs** — classic anti-forensics (System 104, Security 1102)
-- **Service persistence** — new services installed (7045), flagged when the binary lives in a temp/user-writable path
-- **Security service crashes** — Defender/firewall/Security Center terminating unexpectedly (7034)
-- **Suspicious PowerShell** — AMSI-flagged script blocks plus encoded-command / download-cradle keyword matches (4104)
-- **Account abuse** *(admin)* — new local accounts (4720), additions to the Administrators group (4732), failed-logon volume with brute-force threshold (4625)
-- **Sysmon detection** — reports whether Sysmon telemetry is available on the machine
+- **Windows Defender history (30 days)**; malware detections, remediation failures
+- **Protection tampering**; real-time protection disabled, scanning disabled (events 5001/5010/5012/5013)
+- **Cleared event logs**; classic anti-forensics (System 104, Security 1102)
+- **Service persistence**; new services installed (7045), flagged when the binary lives in a temp/user-writable path
+- **Security service crashes**; Defender/firewall/Security Center terminating unexpectedly (7034)
+- **Suspicious PowerShell**; AMSI-flagged script blocks plus encoded-command / download-cradle keyword matches (4104)
+- **Account abuse** *(admin)*; new local accounts (4720), additions to the Administrators group (4732), failed-logon volume with brute-force threshold (4625)
+- **Sysmon detection**; reports whether Sysmon telemetry is available on the machine
 
 ## 🖥️ GUI Threat Analysis Launcher (Menu Option 20)
 
-One keystroke opens **Process Explorer** and/or **Autoruns** pre-configured for threat hunting — EULAs pre-accepted, VirusTotal hash checking pre-enabled — with on-screen triage tips (purple rows = packed images, Ctrl+D for DLL view, hide-Microsoft filtering, etc.).
+One keystroke opens **Process Explorer** and/or **Autoruns** pre-configured for threat hunting; EULAs pre-accepted, VirusTotal hash checking pre-enabled; with on-screen triage tips (purple rows = packed images, Ctrl+D for DLL view, hide-Microsoft filtering, etc.).
 
 ## 🔍 Self-Aware Scanning (no more flagging itself)
 
 Because this tool *contains* threat-hunting keywords and *runs* PowerShell, a naïve scanner would flag its own execution and bury real findings under its own noise. v3 handles this:
 
 - **Its own PowerShell script blocks are excluded.** The Event Log audit recognizes 4104 script-block events generated by SystemTester itself (by script path, with specific content-marker fallback) and drops them, reporting how many were excluded rather than listing its own code snippets.
-- **Defender self-detections are separated from real ones.** Detections whose flagged file path points at this tool's own script — e.g. a generic `PSAttackTool` AMSI match on the script's content — are listed and annotated but **do not** trigger the CRITICAL "possible malware" escalation. A clean machine that merely scanned the tool won't produce a false CRITICAL; genuine external detections still escalate normally.
+- **Defender self-detections are separated from real ones.** Detections whose flagged file path points at this tool's own script; e.g. a generic `PSAttackTool` AMSI match on the script's content; are listed and annotated but **do not** trigger the CRITICAL "possible malware" escalation. A clean machine that merely scanned the tool won't produce a false CRITICAL; genuine external detections still escalate normally.
 - **Detection lines show the flagged Path** for fast triage, and a context note explains any self-attributed hits.
 
 ## 📊 Report Integration
@@ -82,10 +82,10 @@ Findings flow straight into the existing Clean/Detailed reports:
 
 - New **MALWARE / THREAT SCAN** section in the Clean report with counters and flagged items
 - Recommendations engine escalation:
-  - **CRITICAL** — VirusTotal detections, masquerading system processes, or *external* Defender detections → isolate-from-network workflow
-  - **CRITICAL** — protection tampering or cleared logs → anti-forensics review workflow
-  - **WARNING** — unsigned/temp-path/new-service/new-account items needing manual review
-  - **GOOD** — explicit all-clear when nothing is flagged
+  - **CRITICAL**; VirusTotal detections, masquerading system processes, or *external* Defender detections → isolate-from-network workflow
+  - **CRITICAL**; protection tampering or cleared logs → anti-forensics review workflow
+  - **WARNING**; unsigned/temp-path/new-service/new-account items needing manual review
+  - **GOOD**; explicit all-clear when nothing is flagged
 
 ## 🔧 Other Changes
 
@@ -96,7 +96,7 @@ Findings flow straight into the existing Clean/Detailed reports:
 
 ## 🔒 Privacy & Requirements
 
-- VirusTotal checks send **file hashes only — never files** (`VirusTotalSubmitUnknown` stays off)
+- VirusTotal checks send **file hashes only; never files** (`VirusTotalSubmitUnknown` stays off)
 - First VT-enabled run accepts VirusTotal's Terms of Service (per-user, machine-local)
 - Administrator rights recommended: Security-log auditing, unsigned-DLL scan, and several autorun locations require elevation (the launcher self-elevates as before)
 - Administrators-group detection matches the English group name; other locales fall back to the remaining checks
@@ -106,16 +106,16 @@ Findings flow straight into the existing Clean/Detailed reports:
 
 ## ⚠️ Antivirus / AMSI Notes
 
-Because this is *security* tooling, your antivirus may occasionally take notice. This is expected and does **not** mean the tool is infected — a threat scanner necessarily contains the names and patterns of the things it looks for.
+Because this is *security* tooling, your antivirus may occasionally take notice. This is expected and does **not** mean the tool is infected; a threat scanner necessarily contains the names and patterns of the things it looks for.
 
 **"This script contains malicious content" / `ScriptContainedMaliciousContent`**
-Windows Defender's AMSI scans PowerShell as it loads and can match on the malware keyword strings the threat scanner searches for (e.g. known tool names). v3 assembles those detection keywords from fragments at runtime specifically to avoid this, so a clean copy should load normally. If you see this error, you're almost certainly running an older/edited copy — grab the current `SystemTester.ps1`.
+Windows Defender's AMSI scans PowerShell as it loads and can match on the malware keyword strings the threat scanner searches for (e.g. known tool names). v3 assembles those detection keywords from fragments at runtime specifically to avoid this, so a clean copy should load normally. If you see this error, you're almost certainly running an older/edited copy; grab the current `SystemTester.ps1`.
 
 **Defender quarantined the file**
 If the script was removed rather than just blocked, restore it from **Windows Security → Protection History**, then use the current version.
 
 **It still gets flagged**
-Real-time AV can flag security utilities *behaviorally* (spawning Sysinternals binaries, the downloader's TLS handling, etc.) — a different signal than the content block above. Options, cleanest first:
+Real-time AV can flag security utilities *behaviorally* (spawning Sysinternals binaries, the downloader's TLS handling, etc.); a different signal than the content block above. Options, cleanest first:
 
 - **Code-sign the script.** Authenticode-signing `SystemTester.ps1` with a code-signing certificate is the durable fix: it clears most AMSI/SmartScreen friction and lets customers verify the script genuinely came from Pacific Northwest Computers.
 - **Add a folder exclusion.** Exclude the tool's folder in Windows Security → Virus & threat protection → Exclusions. Quick, but scoped to that machine.
@@ -127,4 +127,4 @@ Nothing in this tool uploads files anywhere. VirusTotal lookups send **file hash
 
 **Full menu map (PowerShell interactive mode):** 1–15 diagnostics · 16 Run ALL · 17 Reports · 18 Clear · **19 Malware/Threat Scan · 20 GUI Threat Analysis · 21 Event Log Threat Audit**
 
-*Pacific Northwest Computers — jon@pnwcomputers.com*
+*Pacific Northwest Computers; jon@pnwcomputers.com*
