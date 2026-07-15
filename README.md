@@ -29,7 +29,7 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
 
 ---
 
-## v3; Self-Aware Threat Scan (current)
+## v3; Self-Aware Threat Scan
 
 The threat scan no longer trips over its own execution. Because this tool *contains* threat-hunting keywords and *runs* PowerShell, earlier builds would flag themselves; a real finding could get buried under the tool's own noise. v3 fixes that.
 
