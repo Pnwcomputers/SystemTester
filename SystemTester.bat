@@ -4,13 +4,13 @@ setlocal enableextensions enabledelayedexpansion
 :: =====================================================
 :: Portable Sysinternals System Tester Launcher
 :: Created by Pacific Northwest Computers - 2025
-:: Production Ready Version - v3.0
+:: Production Ready Version - v3
 :: =====================================================
 
 :: Constants
 set "MIN_ZIP_SIZE=10000000"
 set "DOWNLOAD_TIMEOUT_SEC=180"
-set "SCRIPT_VERSION=3.0"
+set "SCRIPT_VERSION=3.1"
 if not defined ST_DEBUG set "ST_DEBUG=0"
 set "LAUNCH_LOG=%TEMP%\SystemTester_launcher.log"
 
@@ -844,7 +844,14 @@ echo ========================================================
 echo         HELP / TROUBLESHOOTING GUIDE v%SCRIPT_VERSION%
 echo ========================================================
 echo.
-echo NEW IN v3.0:
+echo NEW IN v3:
+echo   - Threat scan is now self-aware: the Event Log audit no longer flags
+echo     its OWN PowerShell script blocks, and Defender detections that fire
+echo     on this tool's own content are separated from real external threats
+echo     ^(no more false CRITICAL when the only hit is the tool itself^)
+echo   - Detection lines now show the flagged file Path for quick triage
+echo.
+echo PREVIOUS (v3.0):
 echo   - Event Log Threat Audit ^(PS Menu Option 21, also runs inside the
 echo     Malware/Threat Scan^): Defender detections and tampering, cleared
 echo     logs, new-service persistence ^(7045^), security service crashes,
