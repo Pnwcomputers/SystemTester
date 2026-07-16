@@ -19,6 +19,7 @@ A zero-dependency **PowerShell solution** that runs a comprehensive, curated set
 * Field diagnostics and client handoff reports.
 * Establishing a system baseline health check.
 * Quickly identifying performance bottlenecks.
+* Approximate 15-40min run-time; based on local system & network peformance.
 ---
  
 # What's New in v3: Malware & Threat Detection
