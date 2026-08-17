@@ -10,121 +10,62 @@
 ![Enterprise Ready](https://img.shields.io/badge/Enterprise-Ready-purple)
 ![GitHub issues](https://img.shields.io/github/issues/Pnwcomputers/SystemTester)
 ![Maintenance](https://img.shields.io/badge/Maintained-Yes-green)
- 
-**Thumb-drive friendly, no-install Windows hardware health check toolkit** powered by **Sysinternals** and **PowerShell**.
- 
-A zero-dependency **PowerShell solution** that runs a comprehensive, curated set of Sysinternals and Windows diagnostic tools. It then processes the raw data to produce two essential reports: a **Clean Summary Report** (human-readable, de-noised, with recommendations) and a **Detailed Report** (cleaned tool outputs).
- 
-**The essential utility for:**
+
+**Thumb-drive friendly, no-install Windows hardware health check and malware triage toolkit** powered by **Sysinternals** and **PowerShell**.
+
+A zero-dependency PowerShell solution that runs a comprehensive, curated set of Sysinternals and Windows diagnostic tools. Raw data is automatically processed into two clean deliverables: a **Clean Summary Report** (de-noised, human-readable, with recommendations) and a **Detailed Report** (full tool outputs).
+
+**Target Use Cases:**
 * Field diagnostics and client handoff reports.
-* Establishing a system baseline health check.
-* Quickly identifying performance bottlenecks.
-* Approximate 15-40min run-time; based on local system & network peformance.
----
- 
-# What's New in v3: Malware & Threat Detection
-
-**PNWC Portable Sysinternals System Tester** now goes beyond hardware diagnostics. v3 adds a full malware triage layer built on Sysinternals Autoruns, Sigcheck, ListDLLs, and Process Explorer, plus a native Windows Event Log threat audit; all integrated into the existing report and recommendations engine.
-
-> This is a triage aid for bench technicians. It is **not** a replacement for a full antivirus/EDR scan; it tells you *where to look first*.
+* Establishing system baseline health and performance metrics.
+* Bench technician malware triage and initial threat hunting.
+* Quick hardware bottleneck identification (15–40 minute runtime based on system performance).
 
 ---
 
-## 🛡️ Malware / Threat Scan (Menu Option 19)
+## 🚀 Key Features
 
-Runs standalone or automatically as part of **Run ALL Tests**. Four analysis passes:
-
-**1. Autorun entry analysis (`autorunsc`)**
-- Scans *every* autostart location (registry run keys, services, drivers, scheduled tasks, WMI, winlogon, LSA providers, and more) with `-a *`
-- Verifies code signatures; hides verified-Microsoft entries to cut noise
-- **VirusTotal hash lookups** on every non-Microsoft entry (detection ratios like `3/70`)
-- Flags unsigned binaries launching from user-writable paths (AppData, ProgramData, Downloads) and *anything* launching from temp/public paths
-
-**2. Running-process verification (Process Explorer-style checks)**
-- Authenticode signature check on every unique process image
-- **System-process masquerade detection**; `svchost.exe`, `lsass.exe`, `csrss.exe`, etc. running outside their expected System32 homes (a strong malware indicator)
-- Flags processes running from temp/public paths
-- VirusTotal hash check (via `sigcheck`) on unsigned process images
-
-**3. Unsigned DLL scan (`listdlls -u`)**; unsigned DLLs loaded into running processes (admin only)
-
-**4. Event Log Threat Audit** (see below) also runs inside the scan
-
-Works offline: if VirusTotal is unreachable, the scan automatically falls back to signature-and-heuristics-only analysis.
-
-## 📋 Event Log Threat Audit (Menu Option 21)
-
-Fast, native audit of high-signal compromise indicators (14-day lookback):
-
-- **Windows Defender history (30 days)**; malware detections, remediation failures
-- **Protection tampering**; real-time protection disabled, scanning disabled (events 5001/5010/5012/5013)
-- **Cleared event logs**; classic anti-forensics (System 104, Security 1102)
-- **Service persistence**; new services installed (7045), flagged when the binary lives in a temp/user-writable path
-- **Security service crashes**; Defender/firewall/Security Center terminating unexpectedly (7034)
-- **Suspicious PowerShell**; AMSI-flagged script blocks plus encoded-command / download-cradle keyword matches (4104)
-- **Account abuse** *(admin)*; new local accounts (4720), additions to the Administrators group (4732), failed-logon volume with brute-force threshold (4625)
-- **Sysmon detection**; reports whether Sysmon telemetry is available on the machine
-
-## 🖥️ GUI Threat Analysis Launcher (Menu Option 20)
-
-One keystroke opens **Process Explorer** and/or **Autoruns** pre-configured for threat hunting; EULAs pre-accepted, VirusTotal hash checking pre-enabled; with on-screen triage tips (purple rows = packed images, Ctrl+D for DLL view, hide-Microsoft filtering, etc.).
-
-## 🔍 Self-Aware Scanning (no more flagging itself)
-
-Because this tool *contains* threat-hunting keywords and *runs* PowerShell, a naïve scanner would flag its own execution and bury real findings under its own noise. v3 handles this:
-
-- **Its own PowerShell script blocks are excluded.** The Event Log audit recognizes 4104 script-block events generated by SystemTester itself (by script path, with specific content-marker fallback) and drops them, reporting how many were excluded rather than listing its own code snippets.
-- **Defender self-detections are separated from real ones.** Detections whose flagged file path points at this tool's own script; e.g. a generic `PSAttackTool` AMSI match on the script's content; are listed and annotated but **do not** trigger the CRITICAL "possible malware" escalation. A clean machine that merely scanned the tool won't produce a false CRITICAL; genuine external detections still escalate normally.
-- **Detection lines show the flagged Path** for fast triage, and a context note explains any self-attributed hits.
-
-## 📊 Report Integration
-
-Findings flow straight into the existing Clean/Detailed reports:
-
-- New **MALWARE / THREAT SCAN** section in the Clean report with counters and flagged items
-- Recommendations engine escalation:
-  - **CRITICAL**; VirusTotal detections, masquerading system processes, or *external* Defender detections → isolate-from-network workflow
-  - **CRITICAL**; protection tampering or cleared logs → anti-forensics review workflow
-  - **WARNING**; unsigned/temp-path/new-service/new-account items needing manual review
-  - **GOOD**; explicit all-clear when nothing is flagged
-
-## 🔧 Other Changes
-
-- Tool integrity verification now also covers `procexp`, `autoruns`, and `psping`
-- New PowerShell menu options **19 / 20 / 21**; Run ALL Tests now includes the full threat scan
-- Robust CSV capture for Sysinternals tools (survives UTF-16 output encoding)
-- Tunable event-log lookback window (default 14 days; Defender detections use 30)
-
-## 🔒 Privacy & Requirements
-
-- VirusTotal checks send **file hashes only; never files** (`VirusTotalSubmitUnknown` stays off)
-- First VT-enabled run accepts VirusTotal's Terms of Service (per-user, machine-local)
-- Administrator rights recommended: Security-log auditing, unsigned-DLL scan, and several autorun locations require elevation (the launcher self-elevates as before)
-- Administrators-group detection matches the English group name; other locales fall back to the remaining checks
-- Requires the Sysinternals Suite (Batch Menu Option 5 downloads it automatically)
+* **Hardware & System Diagnostics:** Comprehensive checks covering CPU, memory, storage health, network stability, and driver integrity.
+* **Malware Triage Layer:** Automated signature checks, system-process masquerade detection, unsigned DLL scanning, and VirusTotal hash lookups.
+* **Event Log Threat Audit:** Native audit analyzing Defender history, security service crashes, event log clearing, and suspicious PowerShell execution.
+* **GUI Launcher Integration:** One-key launching of pre-configured Process Explorer and Autoruns instances with EULAs pre-accepted and threat filters enabled.
+* **Self-Aware Detection Filtering:** Smart script block and path filtering prevents the toolkit from flagging its own execution during scans.
 
 ---
 
-## ⚠️ Antivirus / AMSI Notes
+## 📋 PowerShell Interactive Menu Structure
 
-Because this is *security* tooling, your antivirus may occasionally take notice. This is expected and does **not** mean the tool is infected; a threat scanner necessarily contains the names and patterns of the things it looks for.
-
-**"This script contains malicious content" / `ScriptContainedMaliciousContent`**
-Windows Defender's AMSI scans PowerShell as it loads and can match on the malware keyword strings the threat scanner searches for (e.g. known tool names). v3 assembles those detection keywords from fragments at runtime specifically to avoid this, so a clean copy should load normally. If you see this error, you're almost certainly running an older/edited copy; grab the current `SystemTester.ps1`.
-
-**Defender quarantined the file**
-If the script was removed rather than just blocked, restore it from **Windows Security → Protection History**, then use the current version.
-
-**It still gets flagged**
-Real-time AV can flag security utilities *behaviorally* (spawning Sysinternals binaries, the downloader's TLS handling, etc.); a different signal than the content block above. Options, cleanest first:
-
-- **Code-sign the script.** Authenticode-signing `SystemTester.ps1` with a code-signing certificate is the durable fix: it clears most AMSI/SmartScreen friction and lets customers verify the script genuinely came from Pacific Northwest Computers.
-- **Add a folder exclusion.** Exclude the tool's folder in Windows Security → Virus & threat protection → Exclusions. Quick, but scoped to that machine.
-- **Verify integrity first.** Batch Menu Option 4 checks the digital signatures of the bundled Sysinternals tools so you can confirm they're the real Microsoft-signed binaries before trusting a machine's copy.
-
-Nothing in this tool uploads files anywhere. VirusTotal lookups send **file hashes only**, and everything else runs locally.
+| Option | Category | Description |
+| :--- | :--- | :--- |
+| **1–15** | Hardware & System Diagnostics | Storage health, memory stress, CPU benchmarks, driver checks, network performance. |
+| **16** | Full Suite Execution | Runs all diagnostic tests sequentially in zero-touch mode. |
+| **17–18** | Report & Maintenance | Report generation, log cleanup, and workspace reset options. |
+| **19** | Malware & Threat Scan | Standalone 4-pass triage scan (Autoruns, Process Explorer, ListDLLs, Event Audit). |
+| **20** | GUI Threat Launchers | Pre-configured Autoruns & Process Explorer launch shortcuts. |
+| **21** | Event Log Threat Audit | Standalone 14-day lookback audit for high-signal indicators of compromise. |
 
 ---
+
+## ⚙️ Requirements & Execution Notes
+
+* **Privileges:** Administrator rights recommended. Elevation is required for Security Log auditing, unsigned DLL checks (`ListDLLs`), and complete registry autostart scanning.
+* **Dependencies:** Requires the [Sysinternals Suite](https://learn.microsoft.com/en-us/sysinternals/downloads/sysinternals-suite). Option 5 in the batch menu auto-downloads the suite if absent.
+* **Privacy Guarantee:** VirusTotal API lookups submit **SHA-256 file hashes only**. No actual binaries or local system files are ever uploaded (`VirusTotalSubmitUnknown` remains disabled).
+
+---
+
+## 🛡️ Antivirus & AMSI False-Positives
+
+Because security utilities contain strings, patterns, and signature checks targeting known threats, real-time antivirus engines or PowerShell AMSI may occasionally trigger an alert.
+
+* **AMSI Content Warnings (`ScriptContainedMaliciousContent`):** Current builds assemble threat-search keywords dynamically at runtime. Ensure you are executing an official, unmodified `SystemTester.ps1` release.
+* **Code Signing:** Authenticode-signing `SystemTester.ps1` with a trusted internal or commercial certificate clears execution friction across client endpoints.
+* **Folder Exclusions:** For persistent bench use, add the toolkit working directory to **Windows Security → Virus & Threat Protection → Exclusions**.
+* **Integrity Auditing:** Use Batch Option 4 to verify digital signatures on bundled Sysinternals binaries prior to deployment.
+
+---
+
+*Maintained by Pacific Northwest Computers · jon@pnwcomputers.com*
 
 **Full menu map (PowerShell interactive mode):** 1–15 diagnostics · 16 Run ALL · 17 Reports · 18 Clear · **19 Malware/Threat Scan · 20 GUI Threat Analysis · 21 Event Log Threat Audit**
 
