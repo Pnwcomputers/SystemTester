@@ -33,23 +33,40 @@ A zero-dependency PowerShell solution that runs a comprehensive, curated set of 
 
 ---
 
-## 📋 PowerShell Interactive Menu Structure
+## 📋 Toolkit Menu Architecture
+
+### Main Launcher Menu (Entry Wrapper)
+
+| Option | Command | Description |
+| :--- | :--- | :--- |
+| **1** | Run Interactive Menu | Opens the primary PowerShell sub-menu (options 1–21) for targeted testing and threat triage. |
+| **2** | Run ALL Tests Automatically | Launches the entire diagnostic suite sequentially in zero-touch automated mode. |
+| **3** | Fix PowerShell Execution Policy | Resolves local execution policy restrictions blocking PowerShell script execution. |
+| **4** | Verify Tool Integrity | Audits digital signatures on bundled Sysinternals binaries to verify authenticity. |
+| **5** | Download/Update Sysinternals Suite | Automatically fetches or updates the required Sysinternals toolkit binaries. |
+| **6** | GPU Testing Tools Manager | Configures and manages optional GPU diagnostic utilities. |
+| **7** | Help / Troubleshooting | Displays common error resolutions, execution policy guides, and usage details. |
+| **8** | Exit | Safely closes the utility launcher. |
+
+---
+
+### Interactive Diagnostics Sub-Menu (Main Menu Option 1)
 
 | Option | Category | Description |
 | :--- | :--- | :--- |
-| **1–15** | Hardware & System Diagnostics | Storage health, memory stress, CPU benchmarks, driver checks, network performance. |
-| **16** | Full Suite Execution | Runs all diagnostic tests sequentially in zero-touch mode. |
-| **17–18** | Report & Maintenance | Report generation, log cleanup, and workspace reset options. |
+| **1–15** | Hardware & System Diagnostics | Storage health, memory stress, CPU benchmarks, driver checks, and network performance. |
+| **16** | Full Suite Execution | Zero-touch sequential execution of all sub-menu diagnostic tests. |
+| **17–18** | Reports & Maintenance | Custom report generation, log cleanup, and workspace reset tools. |
 | **19** | Malware & Threat Scan | Standalone 4-pass triage scan (Autoruns, Process Explorer, ListDLLs, Event Audit). |
-| **20** | GUI Threat Launchers | Pre-configured Autoruns & Process Explorer launch shortcuts. |
-| **21** | Event Log Threat Audit | Standalone 14-day lookback audit for high-signal indicators of compromise. |
+| **20** | GUI Threat Launchers | Pre-configured Process Explorer & Autoruns threat-hunting shortcuts. |
+| **21** | Event Log Threat Audit | Standalone 14-day lookback audit for high-signal indicators of compromise (IoCs). |
 
 ---
 
 ## ⚙️ Requirements & Execution Notes
 
 * **Privileges:** Administrator rights recommended. Elevation is required for Security Log auditing, unsigned DLL checks (`ListDLLs`), and complete registry autostart scanning.
-* **Dependencies:** Requires the [Sysinternals Suite](https://learn.microsoft.com/en-us/sysinternals/downloads/sysinternals-suite). Option 5 in the batch menu auto-downloads the suite if absent.
+* **Dependencies:** Requires the [Sysinternals Suite](https://learn.microsoft.com/en-us/sysinternals/downloads/sysinternals-suite). Option 5 in the Main Launcher Menu auto-downloads the suite if missing.
 * **Privacy Guarantee:** VirusTotal API lookups submit **SHA-256 file hashes only**. No actual binaries or local system files are ever uploaded (`VirusTotalSubmitUnknown` remains disabled).
 
 ---
@@ -61,12 +78,8 @@ Because security utilities contain strings, patterns, and signature checks targe
 * **AMSI Content Warnings (`ScriptContainedMaliciousContent`):** Current builds assemble threat-search keywords dynamically at runtime. Ensure you are executing an official, unmodified `SystemTester.ps1` release.
 * **Code Signing:** Authenticode-signing `SystemTester.ps1` with a trusted internal or commercial certificate clears execution friction across client endpoints.
 * **Folder Exclusions:** For persistent bench use, add the toolkit working directory to **Windows Security → Virus & Threat Protection → Exclusions**.
-* **Integrity Auditing:** Use Batch Option 4 to verify digital signatures on bundled Sysinternals binaries prior to deployment.
+* **Integrity Auditing:** Use Main Menu Option 4 to verify digital signatures on bundled Sysinternals binaries prior to deployment.
 
 ---
 
 *Maintained by Pacific Northwest Computers · jon@pnwcomputers.com*
-
-**Full menu map (PowerShell interactive mode):** 1–15 diagnostics · 16 Run ALL · 17 Reports · 18 Clear · **19 Malware/Threat Scan · 20 GUI Threat Analysis · 21 Event Log Threat Audit**
-
-*Pacific Northwest Computers; jon@pnwcomputers.com*
