@@ -10,6 +10,7 @@
 ![Enterprise Ready](https://img.shields.io/badge/Enterprise-Ready-purple)
 ![GitHub issues](https://img.shields.io/github/issues/Pnwcomputers/SystemTester)
 ![Maintenance](https://img.shields.io/badge/Maintained-Yes-green)
+<img src="https://img.shields.io/github/downloads/Pnwcomputers/SystemTester/total.svg">
 
 **Thumb-drive friendly, no-install Windows hardware health check and malware triage toolkit** powered by **Sysinternals** and **PowerShell**.
 
