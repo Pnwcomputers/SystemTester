@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.1] - 2026-11-18
+
+### 🔧 Fixed
+- **AutoRun interactivity**: Report-open prompt (`Read-Host`) in `New-Report` now wrapped in `if (-not $AutoRun)`, preventing `-AutoRun` mode from blocking on interactive input.
+- **Netstat connection count**: `Test-Network` now filters `netstat -an` output to lines matching `TCP|UDP` before counting, excluding header rows and blank lines that inflated the reported connection count.
+- **DWM Composition state**: `Test-GPU` now reads the actual `Composition` DWORD from `HKLM:\SOFTWARE\Microsoft\Windows\Dwm` instead of hardcoding "Enabled"; correctly reports "Disabled" when DWM hardware acceleration is off.
+- **`$script:TestResults` scoping**: All 17 unqualified `$TestResults` references in `New-Report` and `Show-Menu` updated to `$script:TestResults` for explicit, consistent scoping.
+- **Network latency duration**: `Test-NetworkLatency` now records actual elapsed milliseconds; was hardcoded to `0`.
+- **Argument splitting in `Invoke-Tool`**: Switched from `.Split(' ')` to `-split '\s+'` so multi-space gaps in argument lists don't produce empty array elements passed to tool executables.
+- **Dead code in `Show-Menu`**: Removed commented-out duplicate GPU sub-menu block (`12a`/`12b`/`12c`) that was never executed.
+- **Stale test-suite count in batch launcher**: Auto-run notice no longer claims a hardcoded "16 test suites."
+
+---
+
 ## [2.6] - 2026-06-22
 
 ### 🚀 Added
