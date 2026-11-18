@@ -343,7 +343,7 @@ function Invoke-Tool {
             $ArgumentList = "-accepteula $ArgumentList"
         }
 
-        $argArray = if ($ArgumentList.Trim()) { $ArgumentList.Split(' ') | Where-Object { $_ } } else { @() }
+        $argArray = if ($ArgumentList.Trim()) { $ArgumentList -split '\s+' | Where-Object { $_ } } else { @() }
         $rawOutput = & $toolPath $argArray 2>&1 | Out-String
         $duration = ((Get-Date) - $start).TotalMilliseconds
         $cleanOutput = Convert-ToolOutput -ToolName $ToolName -RawOutput $rawOutput
@@ -1242,7 +1242,7 @@ function Test-EventLogThreats {
 function Test-Network {
     Write-Host "`n=== Network Analysis ===" -ForegroundColor Green
     try {
-        $connections = (netstat -an 2>&1 | Measure-Object).Count
+        $connections = (netstat -an 2>&1 | Where-Object { $_ -match '^\s+(TCP|UDP)\s' } | Measure-Object).Count
         $script:TestResults += @{
             Tool="Netstat"; Description="Network connections"
             Status="SUCCESS"; Output="Total connections: $connections"; Duration=50
@@ -1440,6 +1440,7 @@ function Test-NetworkSpeed {
 function Test-NetworkLatency {
     Write-Host "`n=== Network Latency (Test-NetConnection & PsPing) ===" -ForegroundColor Green
 
+    $start = Get-Date
     $targetHost = "8.8.8.8"
     # FIX: Removed $targetPort - it was never defined, causing Test-NetConnection to pass Port=0
     # which fails validation. ICMP ping does not require a port.
@@ -1504,7 +1505,7 @@ function Test-NetworkLatency {
 
     $script:TestResults += @{
         Tool="Network-Latency"; Description="Connectivity latency tests"
-        Status=$status; Output=($lines -join "`n"); Duration=0
+        Status=$status; Output=($lines -join "`n"); Duration=(((Get-Date) - $start).TotalMilliseconds)
     }
 }
 
@@ -1894,7 +1895,8 @@ function Test-GPU {
         # Check for hardware acceleration
         $dwm = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\Dwm" -ErrorAction SilentlyContinue
         if ($dwm) {
-            $capabilities += "DWM Composition: Enabled"
+            $dwmEnabled = -not ($dwm.PSObject.Properties['Composition'] -and $dwm.Composition -eq 0)
+            $capabilities += "DWM Composition: $(if ($dwmEnabled) {'Enabled'} else {'Disabled'})"
         }
         
         # Check for GPU scheduling
@@ -2312,10 +2314,10 @@ function New-Report {
     $detailedPath = Join-Path $ReportsDir "SystemTest_Detailed_$timestamp.txt"
 
     # Calculate stats
-    $success = ($TestResults | Where-Object {$_.Status -eq "SUCCESS"}).Count
-    $failed = ($TestResults | Where-Object {$_.Status -eq "FAILED"}).Count
-    $skipped = ($TestResults | Where-Object {$_.Status -eq "SKIPPED"}).Count
-    $total = $TestResults.Count
+    $success = ($script:TestResults | Where-Object {$_.Status -eq "SUCCESS"}).Count
+    $failed = ($script:TestResults | Where-Object {$_.Status -eq "FAILED"}).Count
+    $skipped = ($script:TestResults | Where-Object {$_.Status -eq "SKIPPED"}).Count
+    $total = $script:TestResults.Count
     $successRate = if ($total -gt 0) { [math]::Round(($success/$total)*100,1) } else { 0 }
 
     # === CLEAN REPORT ===
@@ -2341,28 +2343,28 @@ function New-Report {
     $cleanReport += "-------------"
     
     # Extract key info from results
-    $sysInfo = $TestResults | Where-Object {$_.Tool -eq "System-Overview"}
+    $sysInfo = $script:TestResults | Where-Object {$_.Tool -eq "System-Overview"}
     if ($sysInfo) {
         $cleanReport += ""
         $cleanReport += "SYSTEM:"
         $sysInfo.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
     }
 
-    $ramInfo = $TestResults | Where-Object {$_.Tool -eq "RAM-Details"}
+    $ramInfo = $script:TestResults | Where-Object {$_.Tool -eq "RAM-Details"}
     if ($ramInfo -and $ramInfo.Output -match "Usage: ([\d\.]+)%") {
         $cleanReport += ""
         $cleanReport += "MEMORY:"
         $ramInfo.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
     }
 
-    $diskPerf = $TestResults | Where-Object {$_.Tool -eq "Disk-Performance"}
+    $diskPerf = $script:TestResults | Where-Object {$_.Tool -eq "Disk-Performance"}
     if ($diskPerf) {
         $cleanReport += ""
         $cleanReport += "DISK PERFORMANCE:"
         $diskPerf.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
     }
 
-    $gpuDetails = $TestResults | Where-Object {$_.Tool -eq "GPU-Details"}
+    $gpuDetails = $script:TestResults | Where-Object {$_.Tool -eq "GPU-Details"}
     if ($gpuDetails -and $gpuDetails.Output -match "GPU #1") {
         $cleanReport += ""
         $cleanReport += "GPU:"
@@ -2376,21 +2378,21 @@ function New-Report {
         }
     }
 
-    $netSpeed = $TestResults | Where-Object {$_.Tool -eq "Network-SpeedTest"} | Select-Object -Last 1
+    $netSpeed = $script:TestResults | Where-Object {$_.Tool -eq "Network-SpeedTest"} | Select-Object -Last 1
     if ($netSpeed) {
         $cleanReport += ""
         $cleanReport += "NETWORK SPEED:"
         $netSpeed.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
     }
 
-    $netLatency = $TestResults | Where-Object {$_.Tool -eq "Network-Latency"} | Select-Object -Last 1
+    $netLatency = $script:TestResults | Where-Object {$_.Tool -eq "Network-Latency"} | Select-Object -Last 1
     if ($netLatency) {
         $cleanReport += ""
         $cleanReport += "NETWORK LATENCY:"
         $netLatency.Output -split "`n" | ForEach-Object { $cleanReport += "  $_" }
     }
 
-    $updateInfo = $TestResults | Where-Object {$_.Tool -eq "Windows-Update"} | Select-Object -Last 1
+    $updateInfo = $script:TestResults | Where-Object {$_.Tool -eq "Windows-Update"} | Select-Object -Last 1
     if ($updateInfo) {
         $cleanReport += ""
         $cleanReport += "WINDOWS UPDATE:"
@@ -2398,9 +2400,9 @@ function New-Report {
     }
 
     # === MALWARE / THREAT SCAN SUMMARY (v3.0) ===
-    $malAutoruns = $TestResults | Where-Object {$_.Tool -eq "Malware-Autoruns"} | Select-Object -Last 1
-    $malProcs    = $TestResults | Where-Object {$_.Tool -eq "Malware-Processes"} | Select-Object -Last 1
-    $malEvents   = $TestResults | Where-Object {$_.Tool -eq "Malware-EventLog"} | Select-Object -Last 1
+    $malAutoruns = $script:TestResults | Where-Object {$_.Tool -eq "Malware-Autoruns"} | Select-Object -Last 1
+    $malProcs    = $script:TestResults | Where-Object {$_.Tool -eq "Malware-Processes"} | Select-Object -Last 1
+    $malEvents   = $script:TestResults | Where-Object {$_.Tool -eq "Malware-EventLog"} | Select-Object -Last 1
     if ($malAutoruns -or $malProcs -or $malEvents) {
         $cleanReport += ""
         $cleanReport += "MALWARE / THREAT SCAN:"
@@ -2440,7 +2442,7 @@ function New-Report {
     }
 
     # === STORAGE HEALTH ===
-    $smartInfo = $TestResults | Where-Object {$_.Tool -eq "Storage-SMART"}
+    $smartInfo = $script:TestResults | Where-Object {$_.Tool -eq "Storage-SMART"}
     if ($smartInfo -and $smartInfo.Output -notmatch "not available") {
         # "Unhealthy" is the third standard Get-PhysicalDisk HealthStatus value (Healthy/Warning/Unhealthy).
         # Without it a genuinely failing drive is silently missed.
@@ -2496,7 +2498,7 @@ function New-Report {
     }
 
     # === STORAGE CAPACITY ===
-    $storageInfo = $TestResults | Where-Object {$_.Tool -eq "Storage-Overview"}
+    $storageInfo = $script:TestResults | Where-Object {$_.Tool -eq "Storage-Overview"}
     if ($storageInfo) {
         $drives = $storageInfo.Output -split "`n" | Where-Object {$_ -match "([A-Z]:).*\((\d+)%\)"}
         foreach ($drive in $drives) {
@@ -2520,7 +2522,7 @@ function New-Report {
     }
 
     # === SSD TRIM STATUS ===
-    $trimInfo = $TestResults | Where-Object {$_.Tool -eq "SSD-TRIM"}
+    $trimInfo = $script:TestResults | Where-Object {$_.Tool -eq "SSD-TRIM"}
     if ($trimInfo -and $trimInfo.Output -match "Disabled") {
         $recommendations += "* WARNING: TRIM is disabled for SSD"
         $recommendations += "  -> Enable TRIM: fsutil behavior set DisableDeleteNotify 0"
@@ -2528,7 +2530,7 @@ function New-Report {
     }
 
     # === NETWORK ADAPTERS - skip virtual/VPN interfaces to avoid false positives ===
-    $nicInfo = $TestResults | Where-Object {$_.Tool -eq "NIC-Info"}
+    $nicInfo = $script:TestResults | Where-Object {$_.Tool -eq "NIC-Info"}
     if ($nicInfo) {
         $physicalSlowAdapter = $false
         foreach ($nicLine in ($nicInfo.Output -split "`n")) {
@@ -2559,7 +2561,7 @@ function New-Report {
     # Single consolidated block - a previous early check for "Pending > 0" existed
     # above and produced duplicate/contradictory entries when the count was also
     # caught by the WARNING or INFO branches here. Removed; all cases handled below.
-    $updateInfo = $TestResults | Where-Object {$_.Tool -eq "Windows-Update"} | Select-Object -Last 1
+    $updateInfo = $script:TestResults | Where-Object {$_.Tool -eq "Windows-Update"} | Select-Object -Last 1
     if ($updateInfo) {
         if ($updateInfo.Output -match "Pending: (\d+)") {
             $pendingCount = [int]$matches[1]
@@ -2597,7 +2599,7 @@ function New-Report {
     }
 
     # === OS HEALTH (DISM/SFC) ===
-    $osHealth = $TestResults | Where-Object {$_.Tool -eq "OS-Health"}
+    $osHealth = $script:TestResults | Where-Object {$_.Tool -eq "OS-Health"}
     if ($osHealth -and $osHealth.Status -eq "SUCCESS") {
         $oh = $osHealth.Output
         # Language-neutral: DISM exit code 11 = repairable corruption; any non-zero = error.
@@ -2618,7 +2620,7 @@ function New-Report {
     }
 
     # === HARDWARE ERRORS (WHEA) ===
-    $wheaInfo = $TestResults | Where-Object {$_.Tool -eq "WHEA"}
+    $wheaInfo = $script:TestResults | Where-Object {$_.Tool -eq "WHEA"}
     if ($wheaInfo -and $wheaInfo.Output -notmatch "No WHEA errors") {
         $recommendations += "* WARNING: Hardware errors detected in event log"
         $recommendations += "  -> Review Event Viewer for details"
@@ -2684,7 +2686,7 @@ function New-Report {
     }
 
     # === CPU PERFORMANCE ===
-    $cpuPerf = $TestResults | Where-Object {$_.Tool -eq "CPU-Performance"}
+    $cpuPerf = $script:TestResults | Where-Object {$_.Tool -eq "CPU-Performance"}
     if ($cpuPerf -and $cpuPerf.Output -match "Ops/sec: (\d+)") {
         $opsPerSec = [int]$matches[1]
         # FIX v2.5.1: Synthetic test pipes every iteration through Out-Null;
@@ -2717,7 +2719,7 @@ function New-Report {
     }
 
     # === BATTERY HEALTH (Laptops) ===
-    $powerInfo = $TestResults | Where-Object {$_.Tool -eq "Power-Energy"}
+    $powerInfo = $script:TestResults | Where-Object {$_.Tool -eq "Power-Energy"}
     if ($powerInfo -and $powerInfo.Output -match "Battery: ") {
         if ($powerInfo.Output -match "energy-report.html") {
             $recommendations += "* INFO: Energy report generated"
@@ -2785,7 +2787,7 @@ function New-Report {
 
     $detailedReport += "DETAILED RESULTS:"
     $detailedReport += "=" * 80
-    foreach ($result in $TestResults) {
+    foreach ($result in $script:TestResults) {
         $detailedReport += ""
         $detailedReport += "TOOL: $($result.Tool)"
         $detailedReport += "DESCRIPTION: $($result.Description)"
@@ -2812,17 +2814,19 @@ function New-Report {
         Write-Host "  Detailed: $detailedPath ($detailSize KB)" -ForegroundColor White
         Write-Host ""
 
-        Write-Host "Which report would you like to open?" -ForegroundColor Yellow
-        Write-Host "1. Clean Summary (Recommended)"
-        Write-Host "2. Detailed Report"
-        Write-Host "3. Both"
-        Write-Host "4. None"
-        
-        $choice = Read-Host "Choice (1-4)"
-        switch ($choice) {
-            "1" { try { Start-Process notepad.exe $cleanPath } catch {} }
-            "2" { try { Start-Process notepad.exe $detailedPath } catch {} }
-            "3" { try { Start-Process notepad.exe $cleanPath; Start-Process notepad.exe $detailedPath } catch {} }
+        if (-not $AutoRun) {
+            Write-Host "Which report would you like to open?" -ForegroundColor Yellow
+            Write-Host "1. Clean Summary (Recommended)"
+            Write-Host "2. Detailed Report"
+            Write-Host "3. Both"
+            Write-Host "4. None"
+
+            $choice = Read-Host "Choice (1-4)"
+            switch ($choice) {
+                "1" { try { Start-Process notepad.exe $cleanPath } catch {} }
+                "2" { try { Start-Process notepad.exe $detailedPath } catch {} }
+                "3" { try { Start-Process notepad.exe $cleanPath; Start-Process notepad.exe $detailedPath } catch {} }
+            }
         }
     } catch {
         Write-Host "Error saving reports: $($_.Exception.Message)" -ForegroundColor Red
@@ -2978,11 +2982,6 @@ function Show-Menu {
     Write-Host "10. SSD TRIM Status"
     Write-Host "11. Network Adapters"
     Write-Host "12. GPU (Enhanced)" -ForegroundColor Cyan
-    <#
-    Write-Host "    +- 12a. Basic GPU Info"
-    Write-Host "    +- 12b. Vendor-Specific (NVIDIA/AMD)"
-    Write-Host "    +- 12c. GPU Memory Test"
-    #>
     Write-Host "    - 12a. Basic GPU Info"
     Write-Host "    - 12b. Vendor-Specific (NVIDIA/AMD)"
     Write-Host "    - 12c. GPU Memory Test"
@@ -2997,7 +2996,7 @@ function Show-Menu {
     Write-Host "21. Event Log Threat Audit (Defender/Services/PowerShell) $(if (-not $script:IsAdmin) {'[Admin recommended]'})" -ForegroundColor Magenta
     Write-Host "Q.  Quit"
     Write-Host ""
-    Write-Host "Tests completed: $($TestResults.Count)" -ForegroundColor Gray
+    Write-Host "Tests completed: $($script:TestResults.Count)" -ForegroundColor Gray
 }
 
 function Start-Menu {

@@ -202,7 +202,7 @@ echo ========================================================
 echo           RUNNING ALL TESTS AUTOMATICALLY
 echo ========================================================
 echo.
-echo This will run 16 test suites and generate reports.
+echo This will run all test suites and generate reports.
 echo Includes the Malware/Threat Scan (VirusTotal hash lookups when online).
 echo May take 10-30 minutes depending on your system.
 echo.
