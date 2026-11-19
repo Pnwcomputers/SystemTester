@@ -4,21 +4,106 @@ on:
   push:
     paths:
       - '**.bat'
+      - '.gitattributes'
+      - '.github/workflows/batch-lint.yml'
   pull_request:
     paths:
       - '**.bat'
+      - '.gitattributes'
+      - '.github/workflows/batch-lint.yml'
+  workflow_dispatch:
 
 jobs:
   check-batch:
     runs-on: windows-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
 
-      - name: Validate batch files
+      # Static checks: every goto / call :label target must exist, and every
+      # tracked .bat must be covered by the CRLF rule in .gitattributes
+      # (cmd.exe mis-parses labels in LF-only files).
+      - name: Static checks (labels, line endings)
+        shell: pwsh
         run: |
-          for %%f in (*.bat) do (
-            echo Validating %%f
-            cmd /c "call %%f" || echo %%f failed to run
-          )
+          $failed = $false
+          foreach ($rel in (git ls-files '*.bat')) {
+            Write-Host "Checking $rel"
+
+            $eol = (git check-attr eol -- $rel) -replace '^.*:\s*eol:\s*',''
+            if ($eol -ne 'crlf') {
+              Write-Host "::error file=$rel::Not covered by 'eol=crlf' in .gitattributes (got '$eol')"
+              $failed = $true
+            }
+
+            $lines  = [IO.File]::ReadAllLines((Join-Path $PWD $rel))
+            $labels = @{}
+            foreach ($l in $lines) {
+              if ($l -match '^\s*:([A-Za-z0-9_\-\.]+)') { $labels[$Matches[1].ToUpper()] = $true }
+            }
+
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              $l = $lines[$i]
+              # Skip comments and plain echo lines (menu/help text can mention "goto")
+              if ($l -match '^\s*(::|@?rem(\s|$)|@?echo[\s\.:]|@?echo$)') { continue }
+              foreach ($m in [regex]::Matches($l, '(?i)\b(?:goto\s+:?|call\s+:)([A-Za-z0-9_\-\.]+)')) {
+                $t = $m.Groups[1].Value.ToUpper()
+                if ($t -eq 'EOF') { continue }
+                if (-not $labels.ContainsKey($t)) {
+                  Write-Host "::error file=$rel,line=$($i+1)::Jump to undefined label '$t'"
+                  $failed = $true
+                }
+              }
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "Static checks passed."
+
+      # Smoke test: launch the menu and pick "8. Exit" via stdin. The launcher
+      # is interactive, so it must never be run without input (that loops forever).
+      - name: Smoke test launcher (menu -> Exit)
         shell: cmd
+        timeout-minutes: 3
+        run: |
+          rem Feed input from a file: "(echo 8) | ..." sends "8 " (trailing space)
+          > "%RUNNER_TEMP%\menu_input.txt" echo 8
+          cmd /d /c SystemTester.bat < "%RUNNER_TEMP%\menu_input.txt"
+          if errorlevel 1 (
+            echo ::error::SystemTester.bat exited with code %errorlevel%
+            exit /b 1
+          )
+          echo Launcher started and exited cleanly.
+
+      # Guard test: with no input at all, the launcher must give up and exit 1
+      # (not loop forever). Same again after entering the GPU Tools submenu.
+      - name: No-input guard (main menu)
+        shell: cmd
+        timeout-minutes: 3
+        run: |
+          cmd /d /c SystemTester.bat < NUL
+          if not errorlevel 1 (
+            echo ::error::Expected exit code 1 when no input is available
+            exit /b 1
+          )
+          echo Main menu no-input guard works.
+          exit /b 0
+
+      - name: No-input guard (GPU Tools submenu)
+        shell: cmd
+        timeout-minutes: 3
+        run: |
+          > "%RUNNER_TEMP%\gpu_input.txt" echo 6
+          cmd /d /c SystemTester.bat < "%RUNNER_TEMP%\gpu_input.txt" > "%RUNNER_TEMP%\gpu_out.txt" 2>&1
+          set "RC=%errorlevel%"
+          type "%RUNNER_TEMP%\gpu_out.txt"
+          if not "%RC%"=="1" (
+            echo ::error::Expected exit code 1 when input runs out in the GPU menu, got %RC%
+            exit /b 1
+          )
+          findstr /c:"Return to Main Menu" "%RUNNER_TEMP%\gpu_out.txt" >nul || (
+            echo ::error::GPU Tools submenu was never reached
+            exit /b 1
+          )
+          echo GPU submenu no-input guard works.
+          exit /b 0
