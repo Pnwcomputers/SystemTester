@@ -13,16 +13,19 @@ on:
   push:
     paths:
       - '**.ps1'
+      - '.github/workflows/powershell-lint.yml'
   pull_request:
     paths:
       - '**.ps1'
+      - '.github/workflows/powershell-lint.yml'
+  workflow_dispatch:
 
 jobs:
   lint:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
 
       - name: Install PSScriptAnalyzer
         run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
