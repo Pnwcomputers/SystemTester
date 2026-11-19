@@ -161,7 +161,19 @@ echo 7. Help / Troubleshooting
 echo 8. Exit
 echo.
 echo --------------------------------------------------------
+set "choice="
 set /p "choice=Choose an option (1-8): "
+
+:: No input (stdin closed / non-interactive run) - bail out instead of looping forever
+if not defined choice (
+    set /a "_EMPTY_INPUT+=1"
+    if !_EMPTY_INPUT! GEQ 5 (
+        echo No input received - exiting.
+        exit /b 1
+    )
+) else (
+    set "_EMPTY_INPUT=0"
+)
 
 if "%choice%"=="1" goto INTERACTIVE
 if "%choice%"=="2" goto AUTORUN
@@ -268,6 +280,7 @@ set "DOWNLOAD_URL=https://download.sysinternals.com/files/SysinternalsSuite.zip"
 echo This will download ~170MB from Microsoft.
 echo Target: %SYSINT_DIR%
 echo.
+set "confirm="
 set /p "confirm=Proceed? (Y/N): "
 if /i not "%confirm%"=="Y" goto MENU
 
@@ -450,7 +463,8 @@ if not "!AMD_COUNT!"=="0" (
 )
 
 echo.
-set /p "gpu_choice=Choose an option (1-5): "
+set "gpu_choice="
+set /p "gpu_choice=Choose an option (1-6): "
 
 if "%gpu_choice%"=="1" goto GPU_TOOLS_GPUZ
 if "%gpu_choice%"=="2" goto GPU_TOOLS_NVIDIA
@@ -483,6 +497,7 @@ if exist "%GPUZ_PATH%" (
         echo.
     )
     echo.
+    set "run_gpuz="
     set /p "run_gpuz=Run GPU-Z now? (Y/N): "
     if /i "!run_gpuz!"=="Y" (
         echo.
@@ -755,6 +770,7 @@ echo.
 echo Note: Auto-download tries curl.exe, BITS, then Invoke-WebRequest.
 echo --------------------------------------------------------
 echo.
+set "dl_choice="
 set /p "dl_choice=Choose (1-6): "
 
 if "%dl_choice%"=="1" goto GPU_DL_GPUZ_BROWSER

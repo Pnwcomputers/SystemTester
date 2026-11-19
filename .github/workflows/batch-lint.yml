@@ -4,21 +4,71 @@ on:
   push:
     paths:
       - '**.bat'
+      - '.gitattributes'
+      - '.github/workflows/batch-lint.yml'
   pull_request:
     paths:
       - '**.bat'
+      - '.gitattributes'
+      - '.github/workflows/batch-lint.yml'
+  workflow_dispatch:
 
 jobs:
   check-batch:
     runs-on: windows-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
 
-      - name: Validate batch files
+      # Static checks: every goto / call :label target must exist, and every
+      # file must have CRLF line endings (cmd.exe mis-parses labels in LF files).
+      - name: Static checks (labels, line endings)
+        shell: pwsh
         run: |
-          for %%f in (*.bat) do (
-            echo Validating %%f
-            cmd /c "call %%f" || echo %%f failed to run
-          )
+          $failed = $false
+          Get-ChildItem -Recurse -Filter *.bat | ForEach-Object {
+            $file  = $_.FullName
+            $rel   = Resolve-Path -Relative $file
+            $raw   = [IO.File]::ReadAllText($file)
+            $lines = $raw -split "`r?`n"
+            Write-Host "Checking $rel"
+
+            if ($raw -match "(?<!`r)`n") {
+              Write-Host "::error file=$rel::LF-only line endings found; batch files must be CRLF"
+              $failed = $true
+            }
+
+            $labels = @{}
+            foreach ($l in $lines) {
+              if ($l -match '^\s*:([A-Za-z0-9_\-\.]+)') { $labels[$Matches[1].ToUpper()] = $true }
+            }
+
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              $l = $lines[$i]
+              if ($l -match '^\s*(::|rem\s)') { continue }
+              foreach ($m in [regex]::Matches($l, '(?i)\b(?:goto\s+:?|call\s+:)([A-Za-z0-9_\-\.]+)')) {
+                $t = $m.Groups[1].Value.ToUpper()
+                if ($t -eq 'EOF') { continue }
+                if (-not $labels.ContainsKey($t)) {
+                  Write-Host "::error file=$rel,line=$($i+1)::Jump to undefined label '$t'"
+                  $failed = $true
+                }
+              }
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "Static checks passed."
+
+      # Smoke test: launch the menu and pick "8. Exit" via stdin. The launcher
+      # is interactive, so it must never be run without input (that loops forever).
+      - name: Smoke test launcher (menu -> Exit)
         shell: cmd
+        timeout-minutes: 3
+        run: |
+          (echo 8) | cmd /d /c SystemTester.bat
+          if errorlevel 1 (
+            echo ::error::SystemTester.bat exited with code %errorlevel%
+            exit /b 1
+          )
+          echo Launcher started and exited cleanly.
