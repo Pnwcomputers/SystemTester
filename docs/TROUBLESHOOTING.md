@@ -137,5 +137,5 @@ coreinfo output filtering only retains lines matching processor/cache/feature pa
 
 ## Still Stuck?
 
-- Open a [GitHub Issue](../../issues) — include OS build, GPU type, admin status, and the full error message from the report
+- Open a [GitHub Issue](https://github.com/Pnwcomputers/SystemTester/issues) — include OS build, GPU type, admin status, and the full error message from the report
 - Commercial support: jon@pnwcomputers.com / 360-624-7379

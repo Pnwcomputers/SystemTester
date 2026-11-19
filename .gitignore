@@ -6,6 +6,7 @@
 *.csv
 *.html
 *.json
+!/.markdown-link-check.json
 
 # Ignore the Sysinternals binaries
 # (Users should download these fresh via the script)
