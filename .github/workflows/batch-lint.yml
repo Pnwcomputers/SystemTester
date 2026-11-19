@@ -66,7 +66,9 @@ jobs:
         shell: cmd
         timeout-minutes: 3
         run: |
-          (echo 8) | cmd /d /c SystemTester.bat
+          rem Feed input from a file: "(echo 8) | ..." sends "8 " (trailing space)
+          > "%RUNNER_TEMP%\menu_input.txt" echo 8
+          cmd /d /c SystemTester.bat < "%RUNNER_TEMP%\menu_input.txt"
           if errorlevel 1 (
             echo ::error::SystemTester.bat exited with code %errorlevel%
             exit /b 1
