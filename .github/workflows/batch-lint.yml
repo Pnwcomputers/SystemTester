@@ -87,6 +87,7 @@ jobs:
             exit /b 1
           )
           echo Main menu no-input guard works.
+          exit /b 0
 
       - name: No-input guard (GPU Tools submenu)
         shell: cmd
@@ -105,3 +106,4 @@ jobs:
             exit /b 1
           )
           echo GPU submenu no-input guard works.
+          exit /b 0
