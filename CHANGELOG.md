@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 CI
 - **Batch File Check workflow**: No longer hangs for hours running the interactive menu. It now checks labels and line endings, smoke-tests the menu, and verifies the no-input exit; `actions/checkout` updated to v7.
+- **Markdown Link Check workflow**: Had failed on every run because `setup-node` was told to cache npm without a lock file; the cache setting is removed, and the broken Issues link in `docs/TROUBLESHOOTING.md` is fixed.
 
 ---
 
