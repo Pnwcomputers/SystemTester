@@ -11,6 +11,8 @@ setlocal enableextensions enabledelayedexpansion
 set "MIN_ZIP_SIZE=10000000"
 set "DOWNLOAD_TIMEOUT_SEC=180"
 set "SCRIPT_VERSION=3.1"
+set "_EMPTY_INPUT=0"
+set "_NO_INPUT="
 if not defined ST_DEBUG set "ST_DEBUG=0"
 set "LAUNCH_LOG=%TEMP%\SystemTester_launcher.log"
 
@@ -161,28 +163,17 @@ echo 7. Help / Troubleshooting
 echo 8. Exit
 echo.
 echo --------------------------------------------------------
-set "choice="
-set /p "choice=Choose an option (1-8): "
+call :PROMPT choice "Choose an option (1-8): "
+if defined _NO_INPUT goto NO_INPUT
 
-:: No input (stdin closed / non-interactive run) - bail out instead of looping forever
-if not defined choice (
-    set /a "_EMPTY_INPUT+=1"
-    if !_EMPTY_INPUT! GEQ 5 (
-        echo No input received - exiting.
-        exit /b 1
-    )
-) else (
-    set "_EMPTY_INPUT=0"
-)
-
-if "%choice%"=="1" goto INTERACTIVE
-if "%choice%"=="2" goto AUTORUN
-if "%choice%"=="3" goto FIXPOLICY
-if "%choice%"=="4" goto VERIFY
-if "%choice%"=="5" goto DOWNLOAD
-if "%choice%"=="6" goto GPU_TOOLS
-if "%choice%"=="7" goto HELP
-if "%choice%"=="8" goto EXIT
+if "!choice!"=="1" goto INTERACTIVE
+if "!choice!"=="2" goto AUTORUN
+if "!choice!"=="3" goto FIXPOLICY
+if "!choice!"=="4" goto VERIFY
+if "!choice!"=="5" goto DOWNLOAD
+if "!choice!"=="6" goto GPU_TOOLS
+if "!choice!"=="7" goto HELP
+if "!choice!"=="8" goto EXIT
 
 echo Invalid choice. Try again.
 timeout /t 1 >nul
@@ -282,7 +273,7 @@ echo Target: %SYSINT_DIR%
 echo.
 set "confirm="
 set /p "confirm=Proceed? (Y/N): "
-if /i not "%confirm%"=="Y" goto MENU
+if /i not "!confirm!"=="Y" goto MENU
 
 echo.
 echo Downloading...
@@ -463,15 +454,15 @@ if not "!AMD_COUNT!"=="0" (
 )
 
 echo.
-set "gpu_choice="
-set /p "gpu_choice=Choose an option (1-6): "
+call :PROMPT gpu_choice "Choose an option (1-6): "
+if defined _NO_INPUT goto NO_INPUT
 
-if "%gpu_choice%"=="1" goto GPU_TOOLS_GPUZ
-if "%gpu_choice%"=="2" goto GPU_TOOLS_NVIDIA
-if "%gpu_choice%"=="3" goto GPU_TOOLS_AMD
-if "%gpu_choice%"=="4" goto GPU_TOOLS_RECOMMEND
-if "%gpu_choice%"=="5" goto GPU_TOOLS_DOWNLOAD
-if "%gpu_choice%"=="6" goto MENU
+if "!gpu_choice!"=="1" goto GPU_TOOLS_GPUZ
+if "!gpu_choice!"=="2" goto GPU_TOOLS_NVIDIA
+if "!gpu_choice!"=="3" goto GPU_TOOLS_AMD
+if "!gpu_choice!"=="4" goto GPU_TOOLS_RECOMMEND
+if "!gpu_choice!"=="5" goto GPU_TOOLS_DOWNLOAD
+if "!gpu_choice!"=="6" goto MENU
 
 echo Invalid choice.
 timeout /t 1 >nul
@@ -770,15 +761,15 @@ echo.
 echo Note: Auto-download tries curl.exe, BITS, then Invoke-WebRequest.
 echo --------------------------------------------------------
 echo.
-set "dl_choice="
-set /p "dl_choice=Choose (1-6): "
+call :PROMPT dl_choice "Choose (1-6): "
+if defined _NO_INPUT goto NO_INPUT
 
-if "%dl_choice%"=="1" goto GPU_DL_GPUZ_BROWSER
-if "%dl_choice%"=="2" goto GPU_DL_HWINFO_BROWSER
-if "%dl_choice%"=="3" goto GPU_DL_AFTERBURNER
-if "%dl_choice%"=="4" goto GPU_DL_FURMARK
-if "%dl_choice%"=="5" goto GPU_DL_ALL_BROWSER
-if "%dl_choice%"=="6" goto GPU_TOOLS
+if "!dl_choice!"=="1" goto GPU_DL_GPUZ_BROWSER
+if "!dl_choice!"=="2" goto GPU_DL_HWINFO_BROWSER
+if "!dl_choice!"=="3" goto GPU_DL_AFTERBURNER
+if "!dl_choice!"=="4" goto GPU_DL_FURMARK
+if "!dl_choice!"=="5" goto GPU_DL_ALL_BROWSER
+if "!dl_choice!"=="6" goto GPU_TOOLS
 
 echo Invalid choice.
 timeout /t 1 >nul
@@ -1000,3 +991,32 @@ echo   - energy-report.html (if power test ran)
 echo.
 pause
 exit /b 0
+
+:: =====================================================
+:: Shared menu prompt:  call :PROMPT <varname> "<prompt text>"
+:: Clears the variable first (so Enter doesn't repeat the last
+:: choice) and sets _NO_INPUT after 5 empty answers in a row, so
+:: non-interactive runs (CI, RMM tools) exit instead of looping.
+:: =====================================================
+:PROMPT
+set "%~1="
+set /p "%~1=%~2"
+if defined %~1 (
+    set "_EMPTY_INPUT=0"
+) else (
+    set /a "_EMPTY_INPUT+=1"
+    if !_EMPTY_INPUT! GEQ 5 set "_NO_INPUT=1"
+)
+exit /b 0
+
+:NO_INPUT
+echo.
+echo ========================================================
+echo   No input received after several prompts - exiting.
+echo   The launcher needs someone at the keyboard to pick
+echo   menu options. For unattended runs, start the
+echo   PowerShell script directly instead.
+echo ========================================================
+echo.
+pause
+exit /b 1
