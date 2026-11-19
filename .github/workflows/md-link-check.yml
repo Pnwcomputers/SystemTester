@@ -4,15 +4,20 @@ on:
   push:
     paths:
       - '**.md'
+      - '.markdown-link-check.json'
       - '.github/workflows/md-link-check.yml'
   pull_request:
     paths:
       - '**.md'
+      - '.markdown-link-check.json'
       - '.github/workflows/md-link-check.yml'
+  workflow_dispatch:
 
 jobs:
   markdown-link-check:
     runs-on: ubuntu-latest
+    # Bounds the run if a linked site rate-limits us with a long Retry-After.
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -24,9 +29,13 @@ jobs:
         with:
           node-version: '22'
 
+      # Pinned so a new release can't change what gets flagged without warning.
       - name: Install markdown-link-check
-        run: npm install -g markdown-link-check
+        run: npm install -g markdown-link-check@3.15.0
 
+      # .markdown-link-check.json sets per-link timeouts, retries on 429, and
+      # accepts 403 from download sites that block CI runners as bots.
       - name: Run markdown-link-check on all Markdown files
         run: |
-          find . -name "*.md" -not -path "./.git/*" -print0 | xargs -0 -n1 markdown-link-check --retry
+          find . -name "*.md" -not -path "./.git/*" -print0 \
+            | xargs -0 -n1 markdown-link-check -q -c .markdown-link-check.json

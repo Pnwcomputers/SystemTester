@@ -6,7 +6,7 @@ Thank you for your interest in contributing to SystemTester! This document provi
 - [🎯 Ways to Contribute](#-ways-to-contribute)
 - [🔄 Development Process](#-development-process)
 - [📋 Code Review Process](#-code-review-process)
-- [🏷️ Commit Message Format](#-commit-message-format)
+- [🏷 Commit Message Format](#-commit-message-format)
 - [🔒 Security Issues](#-security-issues)
 - [📞 Getting Help](#-getting-help)
 - [🙏 Recognition](#-recognition)
@@ -80,7 +80,7 @@ Thank you for your interest in contributing to SystemTester! This document provi
 4. **Documentation**: Ensure documentation is updated
 5. **Approval**: Maintainer approves and merges PR
 
-## 🏷️ Commit Message Format
+## 🏷 Commit Message Format
 
 Use conventional commits format:
 

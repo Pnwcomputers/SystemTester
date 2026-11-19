@@ -11,9 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔧 Fixed
 - **Broken Issues link**: `docs/TROUBLESHOOTING.md` linked `../../issues`, which 404s on GitHub; it now uses the full Issues URL.
+- **Commit Message Format link in CONTRIBUTING**: The heading's emoji carried an invisible variation selector, so GitHub's anchor didn't match the table-of-contents link; the selector is removed.
 
 ### 🧪 CI
-- **Markdown Link Check workflow**: Had failed on every run because `setup-node` was told to cache npm without a lock file. The cache setting is removed, `actions/checkout` is updated to v7, and the check retries when a site rate-limits it.
+- **Markdown Link Check workflow**: Had failed on every run because `setup-node` was told to cache npm without a lock file. The cache setting is removed, `actions/checkout` is updated to v7, and `markdown-link-check` is pinned to 3.15.0. A new `.markdown-link-check.json` sets per-link timeouts, retries on 429 and accepts 403 from download sites that block CI runners, and the job has a 10-minute limit.
 
 ### Planned
 - HTML report export with charts and graphs
